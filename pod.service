@@ -1,0 +1,21 @@
+[Unit]
+Description=Xandeum Pod System service
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/pod 
+Restart=always
+User=sol
+Environment=NODE_ENV=production
+Environment=RUST_LOG=info
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=xandeum-pod
+
+[Install]
+WantedBy=multi-user.target
+
+
+
+
+
