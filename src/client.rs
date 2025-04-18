@@ -1,5 +1,5 @@
 use anyhow::Result;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use quinn::{ClientConfig, Connection, Endpoint};
 use rustls::pki_types::CertificateDer;
 use rustls::RootCertStore;
@@ -8,40 +8,72 @@ use std::fs::File;
 use std::io::BufReader;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::thread::sleep;
 use std::time::Duration;
+use tokio::sync::mpsc;
 
 use crate::cert::AcceptAllVerifier;
+use crate::storage::StorageState;
 
-pub async fn start_stream_loop(endpoint: Endpoint, addr: SocketAddr) {
-    info!("Starting stream ");
+pub async fn start_stream_loop(
+    endpoint: Endpoint,
+    addr: SocketAddr,
+    storage_state: StorageState,
+    shutdown_rx: &mut mpsc::Receiver<()>,
+) {
+    const RETRY_INTERVAL: u64 = 5;
 
     loop {
-        if let Err(e) = connect_and_handle_stream(endpoint.clone(), addr).await {
-            error!("Stream error : {:?} , retrying in 5 seconds", e);
-            sleep(Duration::from_secs(5));
+        tokio::select! {
+            _ = shutdown_rx.recv() => {
+                log::info!("Received shutdown signal, stopping stream loop");
+                return ;
+            }
+            result = connect_and_handle_stream(endpoint.clone(), addr, storage_state.clone()) => {
+                match result {
+                    Ok(()) => {
+                        log::info!("Stream loop completed successfully");
+                        break;
+                    }
+                    Err(e) => {
+                        log::error!("Stream error: {}, retrying in {} seconds", e, RETRY_INTERVAL);
+                        tokio::time::sleep(Duration::from_secs(RETRY_INTERVAL)).await;
+                    }
+                }
+            }
         }
     }
 }
 
-pub async fn connect_and_handle_stream(endpoint: Endpoint, addr: SocketAddr) -> Result<()> {
+pub async fn connect_and_handle_stream(
+    endpoint: Endpoint,
+    addr: SocketAddr,
+    storage_state: StorageState,
+) -> Result<()> {
     let connection = try_connect(endpoint, addr).await?;
 
     let (mut _send, mut recv) = connection.accept_bi().await?;
 
+    let mut buffer = Vec::new();
+
     loop {
-        let mut buf = vec![0u8; 4096];
+        let mut buf = vec![0u8; 1048576];
         match recv.read(&mut buf).await {
             Ok(None) => {
                 warn!("Stream closed by sender.");
                 return Ok(());
             }
             Ok(Some(n)) => {
-                let message = String::from_utf8_lossy(&buf[..n]);
-                info!("Received: {}", message);
+                buffer.extend_from_slice(&buf[..n]);
+                info!("Received {} bytes, buffer size: {}", n, buffer.len());
+
+                while buffer.len() >= 1048576 {
+                    let page = buffer.drain(..1048576).collect::<Vec<u8>>();
+                    storage_state.write_page(&page).await?;
+                }
             }
             Err(e) => {
                 error!("Error reading from stream: {}", e);
+                return Err(e.into());
             }
         }
     }

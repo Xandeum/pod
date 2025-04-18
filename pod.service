@@ -14,8 +14,3 @@ SyslogIdentifier=xandeum-pod
 
 [Install]
 WantedBy=multi-user.target
-
-
-
-
-

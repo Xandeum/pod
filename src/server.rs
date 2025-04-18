@@ -1,7 +1,10 @@
 use anyhow::Result;
-use axum::{routing::get, Json, Router};
+use axum::{extract::State, routing::get, Json, Router};
 use serde::Serialize;
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
+use tokio::sync::Mutex;
+
+use crate::storage::Metadata;
 
 #[derive(Serialize)]
 struct ApiResponse {
@@ -14,8 +17,16 @@ async fn root() -> Json<ApiResponse> {
     })
 }
 
-pub async fn start_server() -> Result<()> {
-    let app = Router::new().route("/", get(root));
+async fn get_stats(meta: State<Arc<Mutex<Metadata>>>) -> Json<Metadata> {
+    let stats = meta.lock().await;
+    Json(stats.clone())
+}
+
+pub async fn start_server(meta: Arc<Mutex<Metadata>>) -> Result<()> {
+    let app = Router::new()
+        .route("/", get(root))
+        .route("/stats", get(get_stats))
+        .with_state(meta);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3500));
     log::info!("Starting web server on {}", addr);
