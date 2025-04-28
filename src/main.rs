@@ -8,7 +8,7 @@ use quinn::Endpoint;
 use std::{net::SocketAddr, str::FromStr};
 use tokio::{signal, sync::mpsc};
 
-const ATLAS_IP: &str = "127.0.0.1:5000";
+const ATLAS_IP: &str = "65.108.233.175:5000";
 
 #[tokio::main]
 async fn main() -> Result<()> {
