@@ -9,27 +9,30 @@ use std::io::BufReader;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{broadcast, Mutex};
 
 use crate::cert::AcceptAllVerifier;
-use crate::packet::{reassemble_packets, Meta, Operation, Packet, MAX_PACKET_SIZE};
-use crate::storage::{handle_poke, Metadata, StorageState, PAGE_SIZE};
+use crate::packet::{reassemble_packets, split_packet, Operation, Packet, MAX_PACKET_SIZE};
+use crate::stats::Stats;
+use crate::storage::StorageState;
 
 pub async fn start_stream_loop(
     endpoint: Endpoint,
     addr: SocketAddr,
     storage_state: StorageState,
-    shutdown_rx: &mut mpsc::Receiver<()>,
+    shutdown_rx: &mut broadcast::Receiver<()>,
+    stats: Arc<Mutex<Stats>>,
 ) {
     const RETRY_INTERVAL: u64 = 5;
 
+    let mut rx2 = shutdown_rx.resubscribe();
     loop {
         tokio::select! {
-            _ = shutdown_rx.recv() => {
-                log::info!("Received shutdown signal, stopping stream loop");
-                return ;
+            Ok(_) = rx2.recv() => {
+                info!("Shutdown received in start_stream_loop");
+                return ();
             }
-            result = connect_and_handle_stream(endpoint.clone(), addr, storage_state.clone()) => {
+            result = connect_and_handle_stream(endpoint.clone(), addr, storage_state.clone(),shutdown_rx,stats.clone()) => {
                 match result {
                     Ok(()) => {
                         log::info!("Stream loop completed successfully");
@@ -49,58 +52,82 @@ pub async fn connect_and_handle_stream(
     endpoint: Endpoint,
     addr: SocketAddr,
     storage_state: StorageState,
+    shutdown_rx: &mut broadcast::Receiver<()>,
+    stats: Arc<Mutex<Stats>>,
 ) -> Result<()> {
     let connection = try_connect(endpoint, addr).await?;
 
-    let (send, recv) = connection.accept_bi().await?;
-
-    let receiver = Arc::new(Mutex::new(recv));
-    let sender = Arc::new(Mutex::new(send));
+    info!("Connected to server, waiting for streams");
 
     loop {
-        match receive_packets(receiver.clone()).await {
-            Ok(pack) => {
-                if pack.meta.op == Operation::Peek {
-                    info!("received Peek op ");
-                    let _ = handle_peek(storage_state.clone(), sender.clone(), pack).await;
-                } else {
-                    handle_poke(storage_state.clone(), pack).await
-                }
+        let stats_clone = stats.clone();
+        match connection.accept_bi().await {
+            Ok((send, recv)) => {
+                info!("Accepted A Bi Stream");
+                let sender = Arc::new(tokio::sync::Mutex::new(send));
+                let receiver = Arc::new(tokio::sync::Mutex::new(recv));
+                let storage_clone = storage_state.clone();
+
+                tokio::spawn(async move {
+                    if let Err(e) =
+                        handle_stream(storage_clone, sender, receiver, stats_clone).await
+                    {
+                        error!("Error handling stream: {:?}", e);
+                    }
+                });
             }
             Err(e) => {
-                error!("Failed to Receive packets : {:?}", e);
-                continue;
+                error!("Failed to accept bidirectional stream: {:?}", e);
+                return Err(e.into());
             }
         }
     }
 }
 
-
-pub async fn handle_peek(
+async fn handle_stream(
     storage_state: StorageState,
-    sender: Arc<Mutex<SendStream>>,
-    packet: Packet,
-) {
-    let page_id = packet.meta.page_no;
-    let offset = packet.meta.offset;
+    sender: Arc<tokio::sync::Mutex<SendStream>>,
+    receiver: Arc<tokio::sync::Mutex<RecvStream>>,
+    stats: Arc<Mutex<Stats>>,
+) -> Result<()> {
+    // Receive packets
+    let packet = receive_packets(receiver, stats.clone()).await?;
+    info!("Received packet: {:?}", packet);
 
-    let indexes = storage_state.index.lock().await;
+    // Handle based on operation
+    match packet.meta.op {
+        Operation::Peek => {
+            // Handle peek and send response
+            let _ = storage_state
+                .handle_peek(sender.clone(), packet, stats.clone())
+                .await;
+        }
+        Operation::Poke => {
+            storage_state.handle_poke(packet).await;
+        }
+    }
+
+    Ok(())
 }
 
-async fn receive_packets(receiver: Arc<Mutex<RecvStream>>) -> Result<Packet, Error> {
-    let mut buffer = vec![0u8; MAX_PACKET_SIZE * 2];
+async fn receive_packets(
+    receiver: Arc<Mutex<RecvStream>>,
+    stats: Arc<Mutex<Stats>>,
+) -> Result<Packet, Error> {
+    let mut buffer = vec![0u8; MAX_PACKET_SIZE];
 
     let mut packets_chunks = Vec::new();
     let mut expected_total_chunks = 1;
+
     // let mut expected_page_no = request_packet.meta.page_no;
     // let mut expected_file_id = request_packet.meta.file_id;
     let mut recv = receiver.lock().await;
     loop {
-        match recv.read(&mut buffer).await {
-            Ok(Some(n)) => {
-                buffer.truncate(n);
+        let mut buffer = vec![0u8; MAX_PACKET_SIZE];
 
-                let packet: Packet = bincode::deserialize(&buffer)?;
+        match recv.read_exact(&mut buffer).await {
+            Ok(()) => {
+                let packet: Packet = bincode::deserialize(&buffer).unwrap();
 
                 if packets_chunks.is_empty() {
                     expected_total_chunks = packet.meta.total_chunks;
@@ -112,9 +139,6 @@ async fn receive_packets(receiver: Arc<Mutex<RecvStream>>) -> Result<Packet, Err
                     break;
                 }
             }
-            Ok(None) => {
-                warn!("Stream closed by sender.");
-            }
             Err(e) => {
                 error!("Failed to Receive from client Due to : {} ", e);
                 return Err(e.into());
@@ -122,16 +146,45 @@ async fn receive_packets(receiver: Arc<Mutex<RecvStream>>) -> Result<Packet, Err
         };
     }
 
+    let mut stat = stats.lock().await;
+    stat.packets_received += packets_chunks.len() as u64;
+
+    drop(stat);
+
     let reassembled_packet = reassemble_packets(packets_chunks).await;
+    debug!("reassembled packet : {:?}", reassembled_packet);
 
     Ok(reassembled_packet)
 }
 
+pub async fn send_packets(
+    sender_stream: Arc<tokio::sync::Mutex<SendStream>>,
+    packet: Packet,
+    stats: Arc<Mutex<Stats>>,
+) -> Result<(), Error> {
+    let mut sender = sender_stream.lock().await;
+    let packet_chunks = split_packet(packet);
+    let chunks_len = packet_chunks.len();
+    info!("Sending  : {} Packets", chunks_len);
+
+    for pkt in packet_chunks {
+        let s = bincode::serialize(&pkt).unwrap();
+        if let Err(e) = sender.write(&s).await {
+            error!("Failed to send data to client  due to : {:?}", e);
+        }
+    }
+    sender.finish()?;
+
+    let mut stat = stats.lock().await;
+    stat.packets_sent += chunks_len as u64;
+    drop(stat);
+    Ok(())
+}
+
 pub async fn try_connect(endpoint: Endpoint, addr: SocketAddr) -> Result<Connection> {
-    const RETRY_INTERVAL: Duration = Duration::from_secs(10);
+    const RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
     loop {
-        info!("addr : {:?}",addr);
         match endpoint.connect(addr, "atlas")?.await {
             Ok(connection) => {
                 info!("Connected to {}", addr);

@@ -1,7 +1,8 @@
 use anyhow::Result;
 use bincode::{deserialize, serialize};
 use chrono::Utc;
-use log::{error, info};
+use log::{debug, error, info};
+use quinn::SendStream;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::{collections::HashMap, io::Error};
@@ -11,7 +12,9 @@ use tokio::{
     sync::Mutex,
 };
 
-use crate::packet::Packet;
+use crate::client::send_packets;
+use crate::packet::{Meta, Operation, Packet, MAX_DATA_IN_PACKET};
+use crate::stats::Stats;
 
 const FILE_PATH: &str = "xandeum-pod";
 pub const PAGE_SIZE: usize = 1048576;
@@ -63,9 +66,11 @@ pub struct Index {
 
 impl Index {
     fn new() -> Self {
-        Index {
-            index: HashMap::with_capacity(200),
+        let mut index = HashMap::with_capacity(200);
+        for i in 0..200 {
+            index.insert(i, 0);
         }
+        Index { index }
     }
 
     pub fn size() -> u64 {
@@ -117,6 +122,7 @@ impl StorageState {
 
         let metadata = if metadata_bytes.iter().all(|f| *f == 0) {
             let metadata = Metadata::new();
+
             file.seek(SeekFrom::Start(0)).await?;
             file.write_all(&metadata.to_bytes()?).await?;
             metadata
@@ -132,47 +138,12 @@ impl StorageState {
         } else {
             Index::from_bytes(&index_bytes)?
         };
-
         Ok(StorageState {
             file: Arc::new(Mutex::new(file)),
             metadata: Arc::new(Mutex::new(metadata)),
             index: Arc::new(Mutex::new(index)),
         })
     }
-
-    // pub async fn write_page(&self, data: &[u8]) -> Result<()> {
-    //     if data.len() != PAGE_SIZE {
-    //         info!("data length is not equal page size, Skipping");
-    //         return Ok(());
-    //     }
-
-    //     let mut metadata = self.metadata.lock().await;
-    //     let page_index = metadata.current_index;
-    //     let offset = Metadata::size() + page_index * PAGE_SIZE as u64;
-
-    //     if offset + PAGE_SIZE as u64 > 107_374_182_400 {
-    //         info!("Storage Out of capacity!, Skipping");
-    //         return Ok(());
-    //     }
-
-    //     if let Err(e) = self.write(offset, data).await {
-    //         info!("error during writing file : {:?}, Skipping", e);
-    //     }
-
-    //     metadata.current_index += 1;
-    //     metadata.total_pages += 1;
-    //     metadata.total_bytes += data.len() as u64;
-    //     metadata.last_updated = Utc::now().timestamp() as u64;
-
-    //     let bytes = metadata.to_bytes()?;
-
-    //     if let Err(e) = self.write(0, &bytes).await {
-    //         info!("error during writing metadata in file : {:?}, Skipping", e);
-    //     }
-
-    //     info!("Wrote page {} at offset {}", page_index, offset);
-    //     Ok(())
-    // }
 
     async fn write(&self, offset: u64, data: &[u8]) -> Result<(), Error> {
         let mut file = self.file.lock().await;
@@ -187,44 +158,148 @@ impl StorageState {
         }
         Ok(())
     }
-}
 
-pub async fn handle_poke(storage_state: StorageState, packet: Packet) {
-    let page_id = packet.meta.page_no;
-    let offset = packet.meta.offset;
-
-    let mut  indexes = storage_state.index.lock().await;
-    let mut metadata = storage_state.metadata.lock().await;
-
-    let current_index = metadata.current_index;
-
-    let index =  indexes
-        .index
-        .get(&page_id)
-        .map(|ind| ind)
-        .unwrap_or(&current_index);
-    if !indexes.index.contains_key(&page_id) {
-        metadata.current_index += 1;
+    pub async fn read(&self, offset: u64, length: usize) -> anyhow::Result<Vec<u8>> {
+        let mut file = self.file.lock().await;
+        file.seek(std::io::SeekFrom::Start(offset)).await?;
+        let mut buffer = vec![0u8; length];
+        file.read_exact(&mut buffer).await.map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to read {} bytes at offset {}: {}",
+                length,
+                offset,
+                e
+            )
+        })?;
+        debug!("Read {} bytes at offset {}", length, offset);
+        Ok(buffer)
     }
 
-    let file_offset = Metadata::size() + Index::size() + (index * PAGE_SIZE as u64) + offset as u64;
+    pub async fn handle_poke(&self, packet: Packet) {
+        info!("poking");
 
-    let data = packet.data;
+        let page_id = packet.meta.page_no;
+        let offset = packet.meta.offset;
 
-    if data.len()+offset as usize > PAGE_SIZE {
-        info!("data lengthy exceeds page");
+        info!("Page id : {}", page_id);
+        info!("offset : {}", offset);
+
+        let mut indexes = self.index.lock().await;
+        let mut metadata = self.metadata.lock().await;
+
+        let current_index = metadata.current_index;
+
+        let index = indexes
+            .index
+            .iter()
+            .find(|(_, &v)| v == page_id)
+            .map(|(&k, _)| k)
+            .unwrap_or({
+                metadata.current_index += 1;
+                current_index
+            });
+
+        info!("index : {}", index);
+
+        let file_offset =
+            Metadata::size() + Index::size() + (index * PAGE_SIZE as u64) + offset as u64;
+
+        let data = packet.data;
+
+        if data.len() + offset as usize > PAGE_SIZE {
+            info!("data lengthy exceeds page");
+        }
+        info!("Writing in storage");
+
+        let _ = self.write(file_offset as u64, &data).await;
+        info!("Written in storage");
+
+        indexes.index.insert(page_id, index);
+        let index_bytes = indexes.to_bytes().unwrap();
+
+        metadata.last_updated = Utc::now().timestamp() as u64;
+        metadata.total_bytes += data.len() as u64;
+        if index >= metadata.total_pages {
+            metadata.total_pages = index + 1;
+        }
+        self.write(0, &metadata.to_bytes().unwrap()).await.unwrap();
+        self.write(Metadata::size(), &&index_bytes).await.unwrap();
     }
 
-    let _ = storage_state.write(offset as u64, &data).await;
+    pub async fn handle_peek(
+        &self,
+        sender: Arc<Mutex<SendStream>>,
+        packet: Packet,
+        stats: Arc<Mutex<Stats>>,
+    ) -> Result<()> {
+        info!("Handling peek");
 
-    // indexes.index.insert(page_id, *index);
-    let index_bytes = indexes.to_bytes().unwrap();
+        let page_id = packet.meta.page_no;
+        let offset = packet.meta.offset;
+        let length = packet.meta.length;
 
-    metadata.last_updated = Utc::now().timestamp() as u64;
-    metadata.total_bytes += data.len() as u64;
-    if index >= &metadata.total_pages {
-        metadata.total_pages = index + 1;
+        info!("Page id: {}", page_id);
+        info!("offset: {}", offset);
+        info!("length: {}", length);
+
+        // Validate page_id
+        if page_id >= 200 {
+            return Err(anyhow::anyhow!(
+                "Page ID {} exceeds fixed index size 200",
+                page_id
+            ));
+        }
+        let indexes = self.index.lock().await;
+        // info!("indexes:{:?}", indexes.index);
+
+        // Get index safely
+        let index = indexes
+            .index
+            .get(&page_id)
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("No index for page ID {}", page_id))?;
+
+        info!("index: {}", index);
+
+        // Compute file offset
+        let file_offset =
+            Metadata::size() + Index::size() + (index * PAGE_SIZE as u64) + offset as u64;
+
+        // Validate length
+        if length as usize > PAGE_SIZE as usize - offset as usize {
+            return Err(anyhow::anyhow!(
+                "Length {} exceeds page size {} at offset {}",
+                length,
+                PAGE_SIZE,
+                offset
+            ));
+        }
+
+        info!("Reading from storage at offset {}", file_offset);
+
+        let mut data = self.read(file_offset, length as usize).await?;
+        info!("Read {} bytes from storage", data.len());
+
+        if data.len() < MAX_DATA_IN_PACKET {
+            data.resize(MAX_DATA_IN_PACKET, 0);
+        }
+
+        // Create response packet
+        let response_packet = Packet {
+            meta: Meta {
+                op: Operation::Poke,
+                page_no: page_id,
+                offset,
+                length: data.len() as u32,
+                chunk_seq: 0,
+                total_chunks: 1,
+            },
+            data,
+        };
+
+        send_packets(sender, response_packet,stats.clone()).await?;
+        info!("Sent peek response");
+
+        Ok(())
     }
-
-
 }

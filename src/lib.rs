@@ -4,3 +4,4 @@ pub mod logger;
 pub mod server;
 pub mod storage;
 pub mod packet;
+pub mod stats;
