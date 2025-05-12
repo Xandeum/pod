@@ -28,6 +28,7 @@ pub struct CombinedStats {
     pub metadata: Metadata,
     #[serde(flatten)]
     pub stats: Stats,
+    pub file_size: u64,
 }
 
 pub async fn update_system_stats(stats: Arc<Mutex<Stats>>) {
@@ -42,23 +43,23 @@ pub async fn update_system_stats(stats: Arc<Mutex<Stats>>) {
         let mut networks = sysinfo::Networks::new_with_refreshed_list();
         let mut stats = stats.lock().await;
 
-        let mut packets_sent = 0;
-        let mut packets_received = 0;
-        for (_interface, network) in &networks {
-            packets_sent += network.packets_transmitted();
-            packets_received += network.packets_received();
-        }
+        // let mut packets_sent = 0;
+        // let mut packets_received = 0;
+        // for (_interface, network) in &networks {
+        //     packets_sent += network.packets_transmitted();
+        //     packets_received += network.packets_received();
+        // }
 
-        if first_iteration {
-            stats.packets_sent = 0;
-            stats.packets_received = 0;
-            first_iteration = false;
-        } else {
-            stats.packets_sent = packets_sent.saturating_sub(last_packets_sent);
-            stats.packets_received = packets_received.saturating_sub(last_packets_received);
-        }
-        last_packets_sent = packets_sent;
-        last_packets_received = packets_received;
+        // if first_iteration {
+        //     stats.packets_sent = 0;
+        //     stats.packets_received = 0;
+        //     first_iteration = false;
+        // } else {
+        //     stats.packets_sent = packets_sent.saturating_sub(last_packets_sent);
+        //     stats.packets_received = packets_received.saturating_sub(last_packets_received);
+        // }
+        // last_packets_sent = packets_sent;
+        // last_packets_received = packets_received;
 
         stats.cpu_percent = sys.global_cpu_usage();
         stats.ram_used = sys.used_memory();

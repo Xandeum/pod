@@ -16,7 +16,7 @@ use crate::client::send_packets;
 use crate::packet::{Meta, Operation, Packet, MAX_DATA_IN_PACKET};
 use crate::stats::Stats;
 
-const FILE_PATH: &str = "xandeum-pod";
+pub const FILE_PATH: &str = "xandeum-pod";
 pub const PAGE_SIZE: usize = 1048576;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

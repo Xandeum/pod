@@ -92,7 +92,7 @@ async fn handle_stream(
 ) -> Result<()> {
     // Receive packets
     let packet = receive_packets(receiver, stats.clone()).await?;
-    info!("Received packet: {:?}", packet);
+    // info!("Received packet: {:?}", packet);
 
     // Handle based on operation
     match packet.meta.op {
@@ -149,10 +149,12 @@ async fn receive_packets(
     let mut stat = stats.lock().await;
     stat.packets_received += packets_chunks.len() as u64;
 
-    drop(stat);
+    info!("packet received : {:?}",stat.packets_received);
+
+    // drop(stat);
 
     let reassembled_packet = reassemble_packets(packets_chunks).await;
-    debug!("reassembled packet : {:?}", reassembled_packet);
+    // debug!("reassembled packet : {:?}", reassembled_packet);
 
     Ok(reassembled_packet)
 }
@@ -177,7 +179,8 @@ pub async fn send_packets(
 
     let mut stat = stats.lock().await;
     stat.packets_sent += chunks_len as u64;
-    drop(stat);
+    info!("Packets sent : {}",chunks_len);
+    // drop(stat);
     Ok(())
 }
 
