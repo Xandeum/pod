@@ -214,7 +214,7 @@ impl StorageState {
         let _ = self.write(file_offset as u64, &data).await;
         info!("Written in storage");
 
-        indexes.index.insert(page_id, index);
+        indexes.index.insert(index, page_id);
         let index_bytes = indexes.to_bytes().unwrap();
 
         metadata.last_updated = Utc::now().timestamp() as u64;
@@ -255,9 +255,9 @@ impl StorageState {
         // Get index safely
         let index = indexes
             .index
-            .get(&page_id)
-            .copied()
-            .ok_or_else(|| anyhow::anyhow!("No index for page ID {}", page_id))?;
+            .iter()
+            .find_map(|(k, v)| if *v == page_id { Some(*k) } else { None })
+            .ok_or_else(|| anyhow::anyhow!("Page ID {} not found in index map", page_id))?;
 
         info!("index: {}", index);
 
@@ -297,7 +297,7 @@ impl StorageState {
             data,
         };
 
-        send_packets(sender, response_packet,stats.clone()).await?;
+        send_packets(sender, response_packet, stats.clone()).await?;
         info!("Sent peek response");
 
         Ok(())
