@@ -1,6 +1,6 @@
 use anyhow::{Error, Result};
 use log::{debug, error, info, warn};
-use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream};
+use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream, TransportConfig, VarInt};
 use rustls::pki_types::CertificateDer;
 use rustls::RootCertStore;
 use rustls_pemfile::certs;
@@ -149,7 +149,7 @@ async fn receive_packets(
     let mut stat = stats.lock().await;
     stat.packets_received += packets_chunks.len() as u64;
 
-    info!("packet received : {:?}",stat.packets_received);
+    info!("packet received : {:?}", stat.packets_received);
 
     // drop(stat);
 
@@ -179,8 +179,7 @@ pub async fn send_packets(
 
     let mut stat = stats.lock().await;
     stat.packets_sent += chunks_len as u64;
-    info!("Packets sent : {}",chunks_len);
-    // drop(stat);
+    info!("Packets sent : {}", chunks_len);
     Ok(())
 }
 
@@ -224,7 +223,20 @@ pub fn configure_client() -> Result<ClientConfig> {
         .dangerous()
         .set_certificate_verifier(Arc::new(AcceptAllVerifier));
 
-    Ok(ClientConfig::new(Arc::new(
+    let mut client_config = ClientConfig::new(Arc::new(
         quinn::crypto::rustls::QuicClientConfig::try_from(client_config)?,
-    )))
+    ));
+
+    let mut transport_config = TransportConfig::default();
+    transport_config
+        .max_idle_timeout(Some(Duration::from_secs(24 * 60 * 60).try_into().unwrap()))
+        .stream_receive_window(VarInt::from_u64(1_000_000).unwrap()) // 1MB per stream
+        .max_concurrent_bidi_streams(VarInt::from_u64(100).unwrap());
+
+    client_config.transport_config(Arc::new(transport_config));
+
+    // Ok(ClientConfig::new(Arc::new(
+    //     quinn::crypto::rustls::QuicClientConfig::try_from(client_config)?,
+    // )))
+    Ok(client_config)
 }
