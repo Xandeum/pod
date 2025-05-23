@@ -10,6 +10,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, Mutex};
+use tokio::time::sleep;
 
 use crate::cert::AcceptAllVerifier;
 use crate::packet::{reassemble_packets, split_packet, Operation, Packet, MAX_PACKET_SIZE};
@@ -175,6 +176,8 @@ pub async fn send_packets(
             error!("Failed to send data to client  due to : {:?}", e);
         }
     }
+
+    sleep(Duration::from_secs(5)).await;
     sender.finish()?;
 
     let mut stat = stats.lock().await;
