@@ -1,5 +1,5 @@
-use anyhow::{Error, Result};
-use log::{debug, error, info, warn};
+use anyhow::{anyhow, Error, Result};
+use log::{error, info, warn};
 use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream, TransportConfig, VarInt};
 use rustls::pki_types::CertificateDer;
 use rustls::RootCertStore;
@@ -93,7 +93,6 @@ async fn handle_stream(
 ) -> Result<()> {
     // Receive packets
     let packet = receive_packets(receiver, stats.clone()).await?;
-    // info!("Received packet: {:?}", packet);
 
     // Handle based on operation
     match packet.meta.op {
@@ -104,7 +103,7 @@ async fn handle_stream(
                 .await;
         }
         Operation::Poke => {
-            storage_state.handle_poke(packet).await;
+            let _ = storage_state.handle_poke(packet).await;
         }
     }
 
@@ -114,21 +113,20 @@ async fn handle_stream(
 async fn receive_packets(
     receiver: Arc<Mutex<RecvStream>>,
     stats: Arc<Mutex<Stats>>,
-) -> Result<Packet, Error> {
-    let mut buffer = vec![0u8; MAX_PACKET_SIZE];
+) -> Result<Packet> {
+    // let mut buffer = vec![0u8; MAX_PACKET_SIZE];
 
     let mut packets_chunks = Vec::new();
     let mut expected_total_chunks = 1;
 
-    // let mut expected_page_no = request_packet.meta.page_no;
-    // let mut expected_file_id = request_packet.meta.file_id;
     let mut recv = receiver.lock().await;
     loop {
         let mut buffer = vec![0u8; MAX_PACKET_SIZE];
 
         match recv.read_exact(&mut buffer).await {
             Ok(()) => {
-                let packet: Packet = bincode::deserialize(&buffer).unwrap();
+                let packet: Packet = bincode::deserialize(&buffer)
+                    .map_err(|e| anyhow!("Failed to deserialize packet : {:?}", e))?;
 
                 if packets_chunks.is_empty() {
                     expected_total_chunks = packet.meta.total_chunks;
@@ -150,12 +148,13 @@ async fn receive_packets(
     let mut stat = stats.lock().await;
     stat.packets_received += packets_chunks.len() as u64;
 
-    info!("packet received : {:?}", stat.packets_received);
+    info!("packet received : {:?}", packets_chunks.len());
 
     // drop(stat);
 
-    let reassembled_packet = reassemble_packets(packets_chunks).await;
-    // debug!("reassembled packet : {:?}", reassembled_packet);
+    let reassembled_packet = reassemble_packets(packets_chunks)
+        .await
+        .ok_or_else(|| anyhow!("Failed To reassemble packet"))?;
 
     Ok(reassembled_packet)
 }
@@ -171,7 +170,8 @@ pub async fn send_packets(
     info!("Sending  : {} Packets", chunks_len);
 
     for pkt in packet_chunks {
-        let s = bincode::serialize(&pkt).unwrap();
+        let s = bincode::serialize(&pkt)
+            .map_err(|e| anyhow!("Failed to serialize packet : {:?}", e))?;
         if let Err(e) = sender.write(&s).await {
             error!("Failed to send data to client  due to : {:?}", e);
         }

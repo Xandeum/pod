@@ -5,14 +5,12 @@ use serde::Serialize;
 use std::{
     net::SocketAddr,
     sync::Arc,
-    time::{Duration, Instant},
 };
-use sysinfo::System;
 use tokio::{fs::OpenOptions, sync::Mutex};
 
 use crate::{
     stats::{update_system_stats, AppState, CombinedStats, Stats},
-    storage::{Metadata, FILE_PATH, PAGE_SIZE},
+    storage::{Metadata, FILE_PATH},
 };
 
 #[derive(Serialize)]

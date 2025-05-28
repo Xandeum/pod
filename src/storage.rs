@@ -1,9 +1,10 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bincode::{deserialize, serialize};
 use chrono::Utc;
-use log::{debug, error, info};
+use log::{debug, info};
 use quinn::SendStream;
 use serde::{Deserialize, Serialize};
+use std::io::ErrorKind;
 use std::sync::Arc;
 use std::{collections::HashMap, io::Error};
 use tokio::{
@@ -104,11 +105,23 @@ pub struct StorageState {
 impl StorageState {
     pub async fn get_or_create_state() -> Result<Self> {
         info!("path : {:?}", FILE_PATH);
-        let mut file = OpenOptions::new()
+        let mut file = match OpenOptions::new()
             .read(true)
             .write(true)
             .open(FILE_PATH)
-            .await?;
+            .await
+        {
+            Ok(f) => f,
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                return Err(e).context(format!("Symlinked File not Found : {}", FILE_PATH));
+            }
+            Err(e) if e.kind() == ErrorKind::PermissionDenied => {
+                return Err(e).context(format!("Permission denied for : {}", FILE_PATH));
+            }
+            Err(e) => {
+                return Err(e).context(format!("Failed to open file: {}", FILE_PATH));
+            }
+        };
 
         let mut metadata_bytes = vec![0u8; Metadata::size() as usize];
         let mut index_bytes = vec![0u8; Index::size() as usize];
@@ -175,7 +188,7 @@ impl StorageState {
         Ok(buffer)
     }
 
-    pub async fn handle_poke(&self, packet: Packet) {
+    pub async fn handle_poke(&self, packet: Packet)-> Result<()> {
         info!("poking");
 
         let page_id = packet.meta.page_no;
@@ -215,15 +228,16 @@ impl StorageState {
         info!("Written in storage");
 
         indexes.index.insert(index, page_id);
-        let index_bytes = indexes.to_bytes().unwrap();
+        let index_bytes = indexes.to_bytes()?;
 
         metadata.last_updated = Utc::now().timestamp() as u64;
         metadata.total_bytes += data.len() as u64;
         if index >= metadata.total_pages {
             metadata.total_pages = index + 1;
         }
-        self.write(0, &metadata.to_bytes().unwrap()).await.unwrap();
-        self.write(Metadata::size(), &&index_bytes).await.unwrap();
+        self.write(0, &metadata.to_bytes()?).await?;
+        self.write(Metadata::size(), &&index_bytes).await?;
+        Ok(())
     }
 
     pub async fn handle_peek(

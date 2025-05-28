@@ -91,6 +91,8 @@ pub fn split_packet(packet: Packet) -> Vec<Packet> {
 
     let mut packets = Vec::new();
     let page_no = packet.meta.page_no;
+    // Note : This offset is used for Peek/Poke of a Page, It does not
+    // relate to offset of split data.The Split data order is only determined by the chunk_seq.
     let base_offset = packet.meta.offset;
     let total_chunks = ((packet.data.len() as u64 + MAX_DATA_IN_PACKET as u64 - 1)
         / MAX_DATA_IN_PACKET as u64) as u32;
@@ -107,7 +109,11 @@ pub fn split_packet(packet: Packet) -> Vec<Packet> {
     packets
 }
 
-pub async fn reassemble_packets(mut packets: Vec<Packet>) -> Packet {
+pub async fn reassemble_packets(mut packets: Vec<Packet>) -> Option<Packet> {
+    if packets.is_empty() {
+        error!("No packets to reassemble");
+        return None;
+    }
     let first = &packets[0];
 
     let expected_page_no = first.meta.page_no;
@@ -123,9 +129,16 @@ pub async fn reassemble_packets(mut packets: Vec<Packet>) -> Packet {
     for (i, packet) in packets.iter().enumerate() {
         if packet.meta.chunk_seq != i as u32 {
             error!("Missing or out or order packet");
+            return None;
         }
         res.extend_from_slice(&packet.data);
     }
-
-    Packet::new(expected_page_no, expected_offset, length, expected_op, res)
+    res.truncate(length as usize);
+    Some(Packet::new(
+        expected_page_no,
+        expected_offset,
+        length,
+        expected_op,
+        res,
+    ))
 }
