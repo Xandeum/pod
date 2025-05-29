@@ -96,6 +96,10 @@ async fn handle_stream(
 
     // Handle based on operation
     match packet.meta.op {
+        Operation::Handshake => {
+            let pkt = Packet::new_handshake();
+            let _ = send_packets(sender.clone(), pkt, stats.clone()).await?;
+        }
         Operation::Peek => {
             // Handle peek and send response
             let _ = storage_state

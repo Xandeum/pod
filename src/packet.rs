@@ -9,6 +9,7 @@ pub const MAX_PACKET_SIZE: usize = PACKET_META_SIZE + MAX_DATA_IN_PACKET;
 pub enum Operation {
     Poke,
     Peek,
+    Handshake
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -72,7 +73,20 @@ impl Packet {
                 chunk_seq: 0,
                 total_chunks: 1,
             },
-            data: Vec::new(),
+            data: [0u8;MAX_DATA_IN_PACKET].to_vec(),
+        }
+    }
+    pub fn new_handshake() -> Self{
+        Packet {
+            meta: Meta {
+                op:Operation::Handshake,
+                page_no:0,
+                offset:0,
+                length:0,
+                chunk_seq: 0,
+                total_chunks: 1,
+            },
+            data: [0u8;MAX_DATA_IN_PACKET].to_vec(),
         }
     }
 }
