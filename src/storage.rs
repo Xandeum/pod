@@ -16,9 +16,10 @@ use tokio::{
 use crate::client::send_packets;
 use crate::packet::{Meta, Operation, Packet, MAX_DATA_IN_PACKET};
 use crate::stats::Stats;
+use common::consts::PAGE_SIZE;
 
 pub const FILE_PATH: &str = "xandeum-pod";
-pub const PAGE_SIZE: usize = 1048576;
+// pub const PAGE_SIZE: usize = 1048576;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Metadata {
@@ -215,11 +216,11 @@ impl StorageState {
         info!("index : {}", index);
 
         let file_offset =
-            Metadata::size() + Index::size() + (index * PAGE_SIZE as u64) + offset as u64;
+            Metadata::size() + Index::size() + (index * PAGE_SIZE) + offset as u64;
 
         let data = packet.data;
 
-        if data.len() + offset as usize > PAGE_SIZE {
+        if data.len() + offset as usize > PAGE_SIZE as usize{
             info!("data lengthy exceeds page");
         }
         info!("Writing in storage");
