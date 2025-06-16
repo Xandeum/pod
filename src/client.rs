@@ -13,7 +13,7 @@ use tokio::sync::{broadcast, Mutex};
 use tokio::time::sleep;
 
 use crate::cert::AcceptAllVerifier;
-use crate::packet::{reassemble_packets, split_packet, Operation, Packet, MAX_PACKET_SIZE};
+use crate::packet::{reassemble_packets, split_packet, AtlasOperation, Packet, MAX_PACKET_SIZE};
 use crate::stats::Stats;
 use crate::storage::StorageState;
 
@@ -95,19 +95,29 @@ async fn handle_stream(
     let packet = receive_packets(receiver, stats.clone()).await?;
 
     // Handle based on operation
-    match packet.meta.op {
-        Operation::Handshake => {
-            let pkt = Packet::new_handshake();
-            let _ = send_packets(sender.clone(), pkt, stats.clone()).await?;
+    match AtlasOperation::try_from(packet.meta.unwrap().op) {
+        Ok(operation) => {
+            match operation {
+                AtlasOperation::Handshake => {
+                    let pkt = Packet::new_handshake();
+                    let _ = send_packets(sender.clone(), pkt, stats.clone()).await?;
+                }
+                AtlasOperation::PPeek => {
+                    // Handle peek and send response
+                    let _ = storage_state
+                        .handle_peek(sender.clone(), packet, stats.clone())
+                        .await;
+                }
+                AtlasOperation::PPoke => {
+                    let _ = storage_state.handle_poke(packet).await;
+                }
+                _ => {
+                    info!("not implemented yet");
+                }
+            }
         }
-        Operation::Peek => {
-            // Handle peek and send response
-            let _ = storage_state
-                .handle_peek(sender.clone(), packet, stats.clone())
-                .await;
-        }
-        Operation::Poke => {
-            let _ = storage_state.handle_poke(packet).await;
+        Err(_) => {
+            error!("Received packet with unknown operation code: {:?}", packet.meta);
         }
     }
 
@@ -133,7 +143,7 @@ async fn receive_packets(
                     .map_err(|e| anyhow!("Failed to deserialize packet : {:?}", e))?;
 
                 if packets_chunks.is_empty() {
-                    expected_total_chunks = packet.meta.total_chunks;
+                    expected_total_chunks = packet.meta.unwrap().total_chunks;
                 }
 
                 packets_chunks.push(packet);

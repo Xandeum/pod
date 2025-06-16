@@ -156,6 +156,7 @@ fn format_uptime(seconds: u64) -> String {
     result.push_str(&format!("{}s", seconds));
     result.trim().to_string()
 }
+
 const STATS_TEMPLATE: &str = r###"
 <!DOCTYPE html>
 <html lang="en" class="dark">
