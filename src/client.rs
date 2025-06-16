@@ -135,6 +135,7 @@ async fn receive_packets(
                 if packets_chunks.is_empty() {
                     expected_total_chunks = packet.meta.total_chunks;
                 }
+                info!("receuved packet : {:?}",packet);
 
                 packets_chunks.push(packet);
 

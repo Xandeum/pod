@@ -9,7 +9,7 @@ pub const MAX_PACKET_SIZE: usize = PACKET_META_SIZE + MAX_DATA_IN_PACKET;
 pub enum Operation {
     Poke,
     Peek,
-    Handshake
+    Handshake,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -73,33 +73,37 @@ impl Packet {
                 chunk_seq: 0,
                 total_chunks: 1,
             },
-            data: [0u8;MAX_DATA_IN_PACKET].to_vec(),
+            data: [0u8; MAX_DATA_IN_PACKET].to_vec(),
         }
     }
-    pub fn new_handshake() -> Self{
+    pub fn new_handshake() -> Self {
         Packet {
             meta: Meta {
-                op:Operation::Handshake,
-                page_no:0,
-                offset:0,
-                length:0,
+                op: Operation::Handshake,
+                page_no: 0,
+                offset: 0,
+                length: 0,
                 chunk_seq: 0,
                 total_chunks: 1,
             },
-            data: [0u8;MAX_DATA_IN_PACKET].to_vec(),
+            data: [0u8; MAX_DATA_IN_PACKET].to_vec(),
         }
     }
 }
 
 pub fn split_packet(packet: Packet) -> Vec<Packet> {
     if packet.meta.op != Operation::Poke || packet.data.len() <= MAX_DATA_IN_PACKET {
+        let mut data = packet.data;
+
+        data.resize(MAX_DATA_IN_PACKET, 0);
         return vec![Packet {
             meta: Meta {
                 chunk_seq: 0,
                 total_chunks: 1,
+
                 ..packet.meta
             },
-            ..packet
+            data: data,
         }];
     }
 
@@ -145,6 +149,7 @@ pub async fn reassemble_packets(mut packets: Vec<Packet>) -> Option<Packet> {
             error!("Missing or out or order packet");
             return None;
         }
+        info!("data in packet : {:?}", packet.data);
         res.extend_from_slice(&packet.data);
     }
     res.truncate(length as usize);
