@@ -14,8 +14,8 @@ use tokio::{
     sync::{broadcast, Mutex},
 };
 
-const ATLAS_IP: &str = "65.108.233.175:5000";
-// const ATLAS_IP: &str = "127.0.0.1:5000";
+// const ATLAS_IP: &str = "65.108.233.175:5000";
+const ATLAS_IP: &str = "127.0.0.1:5000";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -33,6 +33,7 @@ async fn main() -> Result<()> {
     let mut client_shutdown_rx = shutdown_tx.subscribe();
 
     let storage_state = StorageState::get_or_create_state().await?;
+    let _ = storage_state.bootstrap_dummy_filesystem(0,"127.0.0.1:18268" ).await?;
     let metadata = storage_state.metadata.clone();
 
     let stats = Arc::new(Mutex::new(Stats {

@@ -4,6 +4,7 @@ use chrono::Utc;
 use log::{debug, info};
 use quinn::SendStream;
 use serde::{Deserialize, Serialize};
+use std::error;
 use std::io::ErrorKind;
 use std::sync::Arc;
 use std::{collections::HashMap, io::Error};
@@ -14,16 +15,31 @@ use tokio::{
 };
 
 use crate::client::send_packets;
-use crate::packet::{Meta, Packet, MAX_DATA_IN_PACKET};
+use crate::packet::{AtlasOperation, Meta, Packet, MAX_DATA_IN_PACKET};
 use crate::protos::{
-    FileSystemRecord, GlobalCatalogPage, Inode, PodMapping, PodMappingsPage, XentriesPage,
-    XentryMapping,
+    DirectoryEntry, DirectoryEntryPage, FileSystemRecord, GlobalCatalogPage, Inode, PeekPayload,
+    PodMapping, PodMappingsPage, XentriesPage, XentryMapping,
 };
 use crate::stats::Stats;
 use common::consts::PAGE_SIZE;
 
 pub const FILE_PATH: &str = "xandeum-pod";
 const INODE_METADATA_SIZE: u64 = 1024;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum PageDataType {
+    Xentries(XentriesPage),
+    PodMappings(PodMappingsPage),
+    Inode(Inode),
+    Directory(DirectoryEntryPage),
+    Data(Vec<u8>),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+
+pub struct PeekResponse {
+    response: HashMap<u64, PageDataType>,
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Metadata {
@@ -73,15 +89,19 @@ pub struct Index {
 
 impl Index {
     fn new() -> Self {
-        let mut index = HashMap::with_capacity(200);
-        for i in 0..200 {
-            index.insert(0, i);
+        Index {
+            index: HashMap::new(),
         }
-        Index { index }
+        // let mut index = HashMap::with_capacity(200);
+        // for i in 0..200 {
+        //     index.insert(0, i);
+        // }
+        // Index { index }
     }
 
     pub fn size() -> u64 {
-        bincode::serialized_size(&Index::new()).unwrap_or(3200)
+        3200
+        // bincode::serialized_size(&Index::new()).unwrap_or(3200)
     }
 
     fn to_bytes(&self) -> Result<Vec<u8>> {
@@ -165,6 +185,189 @@ impl StorageState {
         })
     }
 
+    pub async fn bootstrap_dummy_filesystem(&self, fs_id: u64, pod_id_str: &str) -> Result<()> {
+        info!("Bootstrapping dummy filesystem with ID: {}", fs_id);
+
+        // First, check if this filesystem already exists
+        if self
+            .clone()
+            .read_catalog()
+            .await?
+            .filesystems
+            .iter()
+            .any(|fs| fs.fs_id == fs_id)
+        {
+            return Err(anyhow!("Filesystem with ID {} already exists.", fs_id));
+        }
+
+        let mut metadata = self.metadata.lock().await;
+        let mut index_map = self.index.lock().await;
+
+        // --- 1. Define Inodes and Page IDs ---
+        // We need 5 new pages for this filesystem.
+        let base_local_idx = metadata.current_index;
+        let base_global_page_id = fs_id * 1000; // Simple scheme to avoid collisions
+
+        let root_inode_no = 1;
+        let docs_inode_no = 2;
+        let file1_inode_no = 3;
+        let xentries_inode_no = 4;
+        let pod_map_inode_no = 5;
+
+        let root_page_id = base_global_page_id + 1;
+        let docs_page_id = base_global_page_id + 2;
+        let file1_page_id = base_global_page_id + 3;
+        let xentries_page_id = base_global_page_id + 4;
+        let pod_map_page_id = base_global_page_id + 5;
+
+        let mut root_inode = Inode::new(root_inode_no, "system".to_string(), true, false);
+        root_inode.pages = vec![root_page_id];
+
+        let mut docs_inode = Inode::new(docs_inode_no, "system".to_string(), true, false);
+        docs_inode.pages = vec![docs_page_id];
+
+        let mut file1_inode = Inode::new(file1_inode_no, "system".to_string(), false, false);
+        file1_inode.pages = vec![file1_page_id];
+
+        let mut xentries_inode = Inode::new(xentries_inode_no, "system".to_string(), false, true);
+        xentries_inode.pages = vec![xentries_page_id];
+
+        let mut pod_map_inode = Inode::new(pod_map_inode_no, "system".to_string(), false, true);
+        pod_map_inode.pages = vec![pod_map_page_id];
+
+        // --- 2. Define Page Contents ---
+        let root_dir_content = DirectoryEntryPage {
+            entries: vec![DirectoryEntry {
+                name: "docs".to_string(),
+                inode_no: docs_inode_no,
+            }],
+        };
+        let docs_dir_content = DirectoryEntryPage {
+            entries: vec![DirectoryEntry {
+                name: "file1.txt".to_string(),
+                inode_no: file1_inode_no,
+            }],
+        };
+        let file1_content = b"Hello from a dummy file in a bootstrapped filesystem!";
+
+        let xentries_content = XentriesPage {
+            mappings: vec![
+                XentryMapping {
+                    inode_no: root_inode_no,
+                    start_page_number: root_page_id,
+                },
+                XentryMapping {
+                    inode_no: docs_inode_no,
+                    start_page_number: docs_page_id,
+                },
+                XentryMapping {
+                    inode_no: file1_inode_no,
+                    start_page_number: file1_page_id,
+                },
+                XentryMapping {
+                    inode_no: xentries_inode_no,
+                    start_page_number: xentries_page_id,
+                },
+                XentryMapping {
+                    inode_no: pod_map_inode_no,
+                    start_page_number: pod_map_page_id,
+                },
+            ],
+        };
+
+        let pod_mappings_content = PodMappingsPage {
+            mappings: vec![
+                PodMapping {
+                    logical_page: root_page_id,
+                    pod_id: pod_id_str.to_string(),
+                },
+                PodMapping {
+                    logical_page: docs_page_id,
+                    pod_id: pod_id_str.to_string(),
+                },
+                PodMapping {
+                    logical_page: file1_page_id,
+                    pod_id: pod_id_str.to_string(),
+                },
+                PodMapping {
+                    logical_page: xentries_page_id,
+                    pod_id: pod_id_str.to_string(),
+                },
+                PodMapping {
+                    logical_page: pod_map_page_id,
+                    pod_id: pod_id_str.to_string(),
+                },
+            ],
+        };
+
+        // --- 3. Write objects to disk ---
+        self.write_object(&root_inode, &serialize(&root_dir_content)?, base_local_idx)
+            .await?;
+        self.write_object(
+            &docs_inode,
+            &serialize(&docs_dir_content)?,
+            base_local_idx + 1,
+        )
+        .await?;
+        self.write_object(&file1_inode, file1_content, base_local_idx + 2)
+            .await?;
+        self.write_object(
+            &xentries_inode,
+            &serialize(&xentries_content)?,
+            base_local_idx + 3,
+        )
+        .await?;
+        self.write_object(
+            &pod_map_inode,
+            &serialize(&pod_mappings_content)?,
+            base_local_idx + 4,
+        )
+        .await?;
+
+        // --- 4. Update index and metadata ---
+        index_map.index.insert(root_page_id, base_local_idx);
+        index_map.index.insert(docs_page_id, base_local_idx + 1);
+        index_map.index.insert(file1_page_id, base_local_idx + 2);
+        index_map.index.insert(xentries_page_id, base_local_idx + 3);
+        index_map.index.insert(pod_map_page_id, base_local_idx + 4);
+
+        metadata.current_index += 5;
+        metadata.total_pages += 5;
+        metadata.last_updated = Utc::now().timestamp() as u64;
+
+        // --- 5. Create Filesystem Record and add to Catalog ---
+        let fs_record = FileSystemRecord {
+            fs_id,
+            home_pod_id: pod_id_str.to_string(),
+            root_inode_id: root_inode_no.to_string(),
+            xentries_start_page: xentries_page_id,
+            pod_mappings_start_page: pod_map_page_id,
+        };
+
+        // This must be done before we drop the locks
+        let catalog_bytes = {
+            let mut catalog =
+                self.clone()
+                    .read_catalog()
+                    .await
+                    .unwrap_or_else(|_| GlobalCatalogPage {
+                        filesystems: vec![],
+                        next_catalog_page: 0,
+                    });
+            catalog.filesystems.push(fs_record);
+            serialize(&catalog)?
+        };
+
+        // --- 6. Persist all metadata changes ---
+        self.write(0, &catalog_bytes).await?;
+        self.write(PAGE_SIZE, &metadata.to_bytes()?).await?;
+        self.write(PAGE_SIZE + Metadata::size(), &index_map.to_bytes()?)
+            .await?;
+
+        info!("Successfully bootstrapped dummy filesystem ID: {}", fs_id);
+        Ok(())
+    }
+
     async fn write(&self, offset: u64, data: &[u8]) -> Result<(), Error> {
         let mut file = self.file.lock().await;
 
@@ -193,6 +396,45 @@ impl StorageState {
         })?;
         debug!("Read {} bytes at offset {}", length, offset);
         Ok(buffer)
+    }
+
+    pub async fn read_page(&self, page_no: u64) -> Result<Vec<u8>> {
+        let index_map = self.index.lock().await;
+
+        let local_page_index = match index_map.index.get(&page_no) {
+            Some(local_index) => *local_index,
+            None => return Err(anyhow!("Page number {} not found in the index.", page_no)),
+        };
+
+        let base_data_offset = PAGE_SIZE + Metadata::size() + Index::size();
+        let page_offset = base_data_offset + (local_page_index * PAGE_SIZE);
+
+        info!(
+            "Reading page_no: {} (local index: {}) from offset: {}",
+            page_no, local_page_index, page_offset
+        );
+        self.read(page_offset, PAGE_SIZE as usize).await
+    }
+
+    pub async fn get_inode(&self, page_no: u64) -> Result<Inode> {
+        let page_bytes = self.read_page(page_no).await?;
+
+        if page_bytes.len() < INODE_METADATA_SIZE as usize {
+            return Err(anyhow!(
+                "Page {} is smaller than the required inode metadata size.",
+                page_no
+            ));
+        }
+        let inode_bytes = &page_bytes[..INODE_METADATA_SIZE as usize];
+
+        Inode::from_bytes(inode_bytes)
+    }
+
+    pub async fn get_directory_page(&self, page_no: u64) -> Result<DirectoryEntryPage> {
+        let page = self.read_page(page_no).await?;
+        let content_bytes = &page[INODE_METADATA_SIZE as usize..];
+        let dir_page = bincode::deserialize(content_bytes)?;
+        Ok(dir_page)
     }
 
     pub async fn handle_poke(&self, packet: Packet) -> Result<()> {
@@ -323,6 +565,55 @@ impl StorageState {
         Ok(())
     }
 
+    pub async fn handle_cache(
+        self,
+        packet: Packet,
+        sender: Arc<Mutex<SendStream>>,
+        stats: Arc<Mutex<Stats>>,
+    ) -> Result<()> {
+        let payload: PeekPayload = deserialize(&packet.data).unwrap();
+
+        let pages = payload.pages;
+
+        let mut res: HashMap<u64, PageDataType> = HashMap::new();
+
+        for page in pages {
+            let inode = self.get_inode(page).await?;
+
+            res.insert(page, PageDataType::Inode(inode.clone()));
+
+            if inode.is_directory {
+                let page_data = self.get_directory_page(page).await?;
+
+                res.insert(page, PageDataType::Directory(page_data));
+                continue;
+            }
+
+            if inode.is_system_file {
+                let data = self.read_page(page).await?;
+                let content_bytes = &data[INODE_METADATA_SIZE as usize..];
+
+                if let Ok(xentries) = deserialize::<XentriesPage>(content_bytes) {
+                    res.insert(page, PageDataType::Xentries(xentries));
+                } else if let Ok(pod_mapping) = deserialize::<PodMappingsPage>(content_bytes) {
+                    res.insert(page, PageDataType::PodMappings(pod_mapping));
+                } else {
+                    log::error!("Unknown system File Data");
+                }
+            }
+        }
+
+        let payload = PeekResponse { response: res };
+
+        let payload_bytes = serialize(&payload)?;
+
+        let packet = Packet::new(0, 0, 0, AtlasOperation::Cache as i32, payload_bytes);
+
+        send_packets(sender, packet, stats).await?;
+
+        Ok(())
+    }
+
     pub async fn handle_bigbang(
         self,
         fs_record: FileSystemRecord,
@@ -429,6 +720,22 @@ impl StorageState {
         Ok(())
     }
 
+    pub async fn handle_quorum(
+        self,
+        sender: Arc<Mutex<SendStream>>,
+        stats: Arc<Mutex<Stats>>,
+    ) -> Result<()> {
+        let catalogue = self.read_catalog().await?;
+
+        let bytes = serialize(&catalogue).unwrap();
+
+        let pkt = Packet::new(0, 0, 0, AtlasOperation::Quorum as i32, bytes);
+
+        send_packets(sender, pkt, stats).await?;
+
+        Ok(())
+    }
+
     async fn write_object(
         &self,
         inode: &Inode,
@@ -462,7 +769,24 @@ impl StorageState {
         file_handle.read_exact(&mut buffer).await?;
 
         let end = buffer.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
-        deserialize(&buffer[..end]).context("Failed to deserialize Page 0")
+
+        if end == 0 {
+            return Ok(GlobalCatalogPage {
+                filesystems: vec![],
+                next_catalog_page: 0,
+            });
+        }
+
+        // deserialize(&buffer[..end]).context("Failed to deserialize Page 0")
+        match deserialize(&buffer[..end]) {
+            Ok(res) => Ok(res),
+            Err(e) => {
+                return Ok(GlobalCatalogPage {
+                    filesystems: vec![],
+                    next_catalog_page: 0,
+                });
+            }
+        }
     }
 
     pub async fn add_catalog_entry(&self, fs_record: FileSystemRecord) -> Result<()> {

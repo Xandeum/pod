@@ -111,13 +111,24 @@ async fn handle_stream(
                 AtlasOperation::PPoke => {
                     let _ = storage_state.handle_poke(packet).await;
                 }
+                AtlasOperation::Cache => {
+                    let _ = storage_state
+                        .handle_cache(packet, sender.clone(), stats.clone())
+                        .await;
+                }
+                AtlasOperation::Quorum => {
+                    let _ = storage_state.handle_quorum(sender.clone(),stats.clone()).await;
+                }
                 _ => {
                     info!("not implemented yet");
                 }
             }
         }
         Err(_) => {
-            error!("Received packet with unknown operation code: {:?}", packet.meta);
+            error!(
+                "Received packet with unknown operation code: {:?}",
+                packet.meta
+            );
         }
     }
 
