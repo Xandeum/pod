@@ -4,6 +4,20 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
+[workspace.package]
+edition = "2021"
+license = "MIT"
+authors = ["Xandeum Labs <dev@xandeum.com>"]
+repository = "https://github.com/Xandeum"
+homepage = "https://xandeum.com"
+
+[workspace]
+members = [
+    ".",
+    "xandeum-programs/common",
+]
+
+
 [dependencies]
 anyhow = "1.0.98"
 quinn = "0.11.7"
