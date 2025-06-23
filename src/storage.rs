@@ -17,8 +17,9 @@ use tokio::{
 use crate::client::send_packets;
 use crate::packet::{AtlasOperation, Meta, Packet, MAX_DATA_IN_PACKET};
 use crate::protos::{
-    DirectoryEntry, DirectoryEntryPage, FileSystemRecord, GlobalCatalogPage, Inode, PeekPayload,
-    PodMapping, PodMappingsPage, XentriesPage, XentryMapping,
+    ArmageddonData, BigBangData, DirectoryEntry, DirectoryEntryPage, FileSystemRecord,
+    GlobalCatalogPage, Inode, PeekPayload, PodMapping, PodMappingsPage, XentriesPage,
+    XentryMapping,
 };
 use crate::stats::Stats;
 use common::consts::PAGE_SIZE;
@@ -614,24 +615,27 @@ impl StorageState {
         Ok(())
     }
 
-    pub async fn handle_bigbang(
-        self,
-        fs_record: FileSystemRecord,
-        inodes: Option<Vec<Inode>>,
-    ) -> Result<()> {
-        let mut inode_vec =
-            inodes.ok_or_else(|| anyhow!("handle_bigbang requires a vector of 3 inodes"))?;
-        if inode_vec.len() != 3 {
-            return Err(anyhow!(
-                "Expected exactly 3 inodes, but received {}",
-                inode_vec.len()
-            ));
+    pub async fn handle_bigbang(self, data: BigBangData) -> Result<()> {
+        let fs_record = data
+            .fs_record
+            .ok_or_else(|| anyhow!("BigBangData is missing the required FileSystemRecord"))?;
+
+        let mut inodes = data.inode;
+
+        if inodes.len() != 3 {
+            info!("In Sync Mode");
+            self.add_catalog_entry(fs_record).await?;
+            return Ok(());
         }
 
-        inode_vec.sort_by_key(|i| i.inode_no);
-        let root_inode = &inode_vec[0];
-        let xentries_inode = &inode_vec[1];
-        let pod_mappings_inode = &inode_vec[2];
+        let root_dir_entry = data
+            .directory_entery_page
+            .ok_or_else(|| anyhow!("Root directory data missing"))?;
+
+        inodes.sort_by_key(|i| i.inode_no);
+        let root_inode = &inodes[0];
+        let xentries_inode = &inodes[1];
+        let pod_mappings_inode = &inodes[2];
 
         let root_page = root_inode.pages[0];
 
@@ -690,7 +694,8 @@ impl StorageState {
             .index
             .insert(fs_record.pod_mappings_start_page, pod_mappings_local_index);
 
-        self.write_object(root_inode, &[0u8], root_local_index)
+        // Writing All three inodes and content
+        self.write_object(root_inode, &serialize(&root_dir_entry)?, root_local_index)
             .await?;
         self.write_object(
             xentries_inode,
@@ -716,6 +721,32 @@ impl StorageState {
         //     "bigBang for fs_id {} completed successfully.",
         //     fs_record.fs_id
         // );
+
+        Ok(())
+    }
+
+    pub async fn handle_armageddon(self, data: ArmageddonData) -> Result<()> {
+        let fs_record = data
+            .fs_record
+            .ok_or_else(|| anyhow!("ArmageddonData is missing the required FileSystemRecord"))?;
+
+        let pages_to_delete = data.page_ids;
+
+        if pages_to_delete.is_empty() {
+            self.remove_catalog_entry(fs_record).await?;
+        }
+
+        // let mut global_meta = self.metadata.lock().await;
+        let mut global_index = self.index.lock().await;
+
+        for page in pages_to_delete {
+            let local_index = global_index
+                .index
+                .remove(&page)
+                .ok_or_else(|| anyhow!("Page  {} is not stored on This Pod ", page))?;
+
+            self.clear_page(local_index).await?;
+        }
 
         Ok(())
     }
@@ -807,12 +838,32 @@ impl StorageState {
         Ok(())
     }
 
+    pub async fn remove_catalog_entry(&self, fs_record: FileSystemRecord) -> Result<()> {
+        let mut catalog_page = self.clone().read_catalog().await?;
+        catalog_page
+            .filesystems
+            .retain(|fs| fs.fs_id != fs_record.fs_id);
+        self.write_catalog(catalog_page).await?;
+
+        Ok(())
+    }
+
     pub async fn write_catalog(&self, catalog_page: GlobalCatalogPage) -> Result<()> {
         let mut bytes = serialize(&catalog_page)?;
         bytes.resize(PAGE_SIZE as usize, 0);
         let mut file_handle = self.file.lock().await;
         file_handle.seek(SeekFrom::Start(0)).await?;
         file_handle.write_all(&bytes).await?;
+        Ok(())
+    }
+
+    pub async fn clear_page(&self, page_no: u64) -> Result<()> {
+        let base_data_area_offset = PAGE_SIZE + Metadata::size() + Index::size();
+        let physical_offset = base_data_area_offset + (page_no * PAGE_SIZE);
+
+        self.write(physical_offset, &[0; PAGE_SIZE as usize])
+            .await?;
+
         Ok(())
     }
 }

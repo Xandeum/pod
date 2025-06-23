@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Error, Result};
+use bincode::deserialize;
 use log::{error, info, warn};
 use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream, TransportConfig, VarInt};
 use rustls::pki_types::CertificateDer;
@@ -14,6 +15,7 @@ use tokio::time::sleep;
 
 use crate::cert::AcceptAllVerifier;
 use crate::packet::{reassemble_packets, split_packet, AtlasOperation, Packet, MAX_PACKET_SIZE};
+use crate::protos::{ArmageddonData, BigBangData};
 use crate::stats::Stats;
 use crate::storage::StorageState;
 
@@ -102,6 +104,14 @@ async fn handle_stream(
                     let pkt = Packet::new_handshake();
                     let _ = send_packets(sender.clone(), pkt, stats.clone()).await?;
                 }
+                AtlasOperation::PBigbang => {
+                    let big_bang_data: BigBangData = deserialize(&packet.data)?;
+                    let _ = storage_state.handle_bigbang(big_bang_data).await?;
+                }
+                AtlasOperation::PArmageddon => {
+                    let armageddon_data: ArmageddonData = deserialize(&packet.data)?;
+                    let _ = storage_state.handle_armageddon(armageddon_data).await?;
+                }
                 AtlasOperation::PPeek => {
                     // Handle peek and send response
                     let _ = storage_state
@@ -117,7 +127,9 @@ async fn handle_stream(
                         .await;
                 }
                 AtlasOperation::Quorum => {
-                    let _ = storage_state.handle_quorum(sender.clone(),stats.clone()).await;
+                    let _ = storage_state
+                        .handle_quorum(sender.clone(), stats.clone())
+                        .await;
                 }
                 _ => {
                     info!("not implemented yet");
