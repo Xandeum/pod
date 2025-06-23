@@ -15,7 +15,7 @@ use tokio::time::sleep;
 
 use crate::cert::AcceptAllVerifier;
 use crate::packet::{reassemble_packets, split_packet, AtlasOperation, Packet, MAX_PACKET_SIZE};
-use crate::protos::{ArmageddonData, BigBangData};
+use crate::protos::{ArmageddonData, BigBangData, MkDirPayload, RmDirPayload};
 use crate::stats::Stats;
 use crate::storage::StorageState;
 
@@ -112,6 +112,16 @@ async fn handle_stream(
                     let armageddon_data: ArmageddonData = deserialize(&packet.data)?;
                     let _ = storage_state.handle_armageddon(armageddon_data).await?;
                 }
+
+                AtlasOperation::PMkdir => {
+                    let mkdir_data: MkDirPayload = deserialize(&packet.data)?;
+                    let _ = storage_state.handle_mkdir(mkdir_data).await?;
+                }
+                AtlasOperation::PRmdir => {
+                    let rmdir_data: RmDirPayload = deserialize(&packet.data)?;
+                    let _ = storage_state.handle_rmdir(rmdir_data).await?;
+                }
+
                 AtlasOperation::PPeek => {
                     // Handle peek and send response
                     let _ = storage_state
