@@ -1,4 +1,4 @@
-# .github/workflows/release.yml in your private 'pod' repository
+# .github/workflows/release.yml (Final Version)
 
 name: Build and Publish to APT Repository (GPG-Free)
 
@@ -32,47 +32,32 @@ jobs:
           path: apt-repo
           token: ${{ secrets.PAT }}
 
-      # This is the updated, more robust step with logging
       - name: Update APT repository metadata
         run: |
-          set -x # Enable verbose logging for this step
-
           # Define paths
           REPO_DIR="${GITHUB_WORKSPACE}/apt-repo"
           DEB_DIR="${GITHUB_WORKSPACE}/target/debian"
 
           # Create the repository structure
-          echo "--- Creating repository structure ---"
           mkdir -p "${REPO_DIR}/dists/stable/main/binary-amd64"
           mkdir -p "${REPO_DIR}/pool/main"
 
           # Copy the built .deb package
-          echo "--- Copying .deb package ---"
           cp ${DEB_DIR}/*.deb "${REPO_DIR}/pool/main/"
 
-          # --- DEBUG: Show the file structure BEFORE generating metadata ---
-          echo "--- File structure inside apt-repo before metadata generation ---"
-          ls -R "${REPO_DIR}"
-
-          # --- Generate Metadata ---
-          # We change into the repo directory to ensure all paths are relative and correct
+          # Change into the repo directory to ensure all paths are relative and correct
           cd "${REPO_DIR}"
 
-          echo "--- Generating Packages file ---"
-          # Scan packages and create the Packages index
+          # --- Generate and SAVE the metadata files ---
+          # This time with the output redirection '>' to save the files
+          echo "Generating and saving Packages file..."
           dpkg-scanpackages --multiversion pool > dists/stable/main/binary-amd64/Packages
 
-          echo "--- Compressing Packages file ---"
-          # Gzip the Packages file
+          echo "Compressing Packages file..."
           gzip -9 -c dists/stable/main/binary-amd64/Packages > dists/stable/main/binary-amd64/Packages.gz
 
-          echo "--- Generating Release file ---"
-          # Create the final Release file
+          echo "Generating and saving Release file..."
           apt-ftparchive release dists/stable > dists/stable/Release
-
-          # --- DEBUG: Show the file structure AFTER generating metadata ---
-          echo "--- Final file structure inside apt-repo ---"
-          ls -R "${REPO_DIR}"
 
       - name: Commit and push changes
         run: |
