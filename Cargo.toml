@@ -11,6 +11,9 @@ authors = ["Xandeum Labs <dev@xandeum.com>"]
 repository = "https://github.com/Xandeum"
 homepage = "https://xandeum.com"
 
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
 [workspace]
 members = [
     ".",
