@@ -1,0 +1,85 @@
+# .github/workflows/release.yml in your private 'pod' repository
+
+name: Build and Publish to APT Repository (GPG-Free)
+
+# This workflow triggers when a new tag is pushed that starts with 'v' (e.g., v0.1.0)
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish-deb-package:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Checkout the 'pod' source code with its submodules
+      - name: Checkout pod repository
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      # 2. Setup Rust, cache dependencies, and build the .deb package
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Install cargo-deb
+        run: cargo install cargo-deb
+      - name: Build Debian package
+        run: cargo deb
+
+      # 3. Checkout the 'pod-apt-package' repository to a subfolder
+      - name: Checkout APT repository
+        uses: actions/checkout@v4
+        with:
+          repository: Xandeum/pod-apt-package
+          path: apt-repo
+          token: ${{ secrets.PAT }} # Personal Access Token to allow pushing to another repo
+
+      # 4. Update the APT repository with the new package (No GPG)
+      - name: Update APT repository metadata
+        run: |
+          # Define absolute paths for clarity
+          REPO_DIR="${GITHUB_WORKSPACE}/apt-repo"
+          DEB_PACKAGE_DIR="${GITHUB_WORKSPACE}/target/debian"
+          DIST_DIR="${REPO_DIR}/dists/stable"
+          POOL_DIR="${REPO_DIR}/pool/main"
+
+          # Ensure the required directory structure exists in the APT repository
+          echo "Creating repository structure..."
+          mkdir -p "${DIST_DIR}/main/binary-amd64"
+          mkdir -p "${POOL_DIR}"
+
+          # Copy the newly built .deb package into the pool
+          echo "Copying new package to the pool..."
+          cp ${DEB_PACKAGE_DIR}/*.deb "${POOL_DIR}/"
+
+          # --- Generate Package Index ---
+          # This command scans all .deb files in the pool and creates a `Packages` file
+          # that lists all available packages, their versions, and dependencies.
+          echo "Generating Packages index..."
+          dpkg-scanpackages --multiversion "${POOL_DIR}" > "${DIST_DIR}/main/binary-amd64/Packages"
+
+          # Compress the Packages index, as apt prefers the gzipped version
+          gzip -9 -c "${DIST_DIR}/main/binary-amd64/Packages" > "${DIST_DIR}/main/binary-amd64/Packages.gz"
+
+          # --- Generate Release File ---
+          # This command creates a `Release` file, which is the main entry point for apt.
+          # It contains checksums for all the index files (like Packages.gz).
+          echo "Generating Release file..."
+          (cd "${REPO_DIR}" && apt-ftparchive release "dists/stable" > "${DIST_DIR}/Release")
+
+      # 5. Commit and push the changes to the 'pod-apt-package' repository
+      - name: Commit and push changes
+        run: |
+          cd "${GITHUB_WORKSPACE}/apt-repo"
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add .
+          if ! git diff-index --quiet HEAD; then
+            echo "Changes detected. Committing and pushing to APT repository..."
+            git commit -m "ci: Add pod package version ${{ github.ref_name }}"
+            git push
+          else
+            echo "No changes to commit."
+          fi
