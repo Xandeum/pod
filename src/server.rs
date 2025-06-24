@@ -231,7 +231,7 @@ const STATS_TEMPLATE: &str = r###"
             stroke: #eab308;
         }
         .data-line.totalBytes {
-            stroke: url(#gradientTotalBytes);
+            stroke: #22c55e;
         }
         .data-line.packetsReceived {
             stroke: #22c55e;
@@ -304,7 +304,6 @@ const STATS_TEMPLATE: &str = r###"
             </section>
 
             <section class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-3">
-                <!-- Row 1 -->
                 <div class="chart-card bg-card-bg p-4 rounded-lg shadow-xl border border-card-border">
                     <h3 class="text-md font-semibold text-text-secondary mb-3">Page Usage</h3>
                     <svg id="pageUsageChart" class="pie-chart-svg" viewBox="0 0 200 140">
@@ -325,19 +324,12 @@ const STATS_TEMPLATE: &str = r###"
                     <h3 class="text-md font-semibold text-text-secondary mb-1">Total Bytes Transferred</h3>
                     <div class="text-xl font-semibold text-white mb-3" id="totalBytesValue">{{total_bytes}}</div>
                     <svg id="totalBytesChart" class="chart-svg h-40">
-                        <defs>
-                            <linearGradient id="gradientTotalBytes" x1="0%" y1="0%" x2="100%" y2="0%">
-                                <stop offset="0%" style="stop-color:#22c55e;stop-opacity:1" />
-                                <stop offset="100%" style="stop-color:#3b82f6;stop-opacity:1" />
-                            </linearGradient>
-                        </defs>
                         <g class="grid-lines"></g>
                         <g class="x-axis"></g>
                         <g class="y-axis"></g>
                         <path class="data-line totalBytes" d="" />
                     </svg>
                 </div>
-                <!-- Row 2 -->
                 <div class="chart-card bg-card-bg p-4 rounded-lg shadow-xl border border-card-border">
                     <h3 class="text-md font-semibold text-text-secondary mb-1">CPU Usage (%)</h3>
                     <div class="text-xl font-semibold text-white mb-3" id="cpuPercent">0%</div>
@@ -358,7 +350,6 @@ const STATS_TEMPLATE: &str = r###"
                         <path class="data-line ram" d="" />
                     </svg>
                 </div>
-                <!-- Row 3 -->
                 <div class="chart-card bg-card-bg p-4 rounded-lg shadow-xl border border-card-border">
                     <h3 class="text-md font-semibold text-text-secondary mb-1">Packets Received/Min</h3>
                     <div class="text-xl font-semibold text-white mb-3" id="packetsReceived">{{packets_received}}</div>
@@ -391,6 +382,9 @@ const STATS_TEMPLATE: &str = r###"
         // Formatting functions
         function formatWithThousands(n) {
             if (typeof n !== 'number' && typeof n !== 'string') return 'N/A';
+            // For y-axis labels that might be large, format them concisely
+            if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+            if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
             return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
         }
         function bytesToMiB(bytes) {
@@ -607,26 +601,20 @@ const STATS_TEMPLATE: &str = r###"
             }
         }
 
+        // === FUNCTION WITH NEW SCALING LOGIC IS HERE ===
         function updateChart(svgId, dataKey, formatTooltip, isBytes = false, isPercent = false) {
             const svgElement = document.getElementById(svgId);
-            if (!svgElement) {
-                console.warn(`SVG element ${svgId} not found.`);
-                return;
-            }
+            if (!svgElement) { return; }
 
             initializeSvgWidth(svgElement);
             const actualSvgHeight = svgElement.clientHeight || defaultSvgHeight;
             const actualChartHeight = actualSvgHeight - padding.top - padding.bottom;
-            if (actualChartHeight <= 0) {
-                console.warn(`Chart height for ${svgId} is too small or negative.`);
-                return;
-            }
+            if (actualChartHeight <= 0) { return; }
 
             const data = chartData.map(d => d[dataKey]).filter(v => typeof v === 'number' && !isNaN(v));
             const times = chartData.map(d => d.time instanceof Date ? d.time.getTime() : NaN).filter(t => !isNaN(t));
 
             if (data.length < 1 || times.length < 1) {
-                console.warn(`No valid data for ${svgId}, data:`, data, 'times:', times);
                 const path = svgElement.querySelector('.data-line');
                 if (path) path.setAttribute('d', '');
                 return;
@@ -634,17 +622,11 @@ const STATS_TEMPLATE: &str = r###"
 
             const minValue = Math.min(...data);
             const maxValue = Math.max(...data, 0);
-            const range = Math.max(maxValue - minValue, 1);
             let yMin, yMax, unit = 'bytes';
 
             if (isPercent) {
-                yMin = Math.max(0, minValue - range * 0.5);
-                yMax = Math.min(100, maxValue + range * 0.5);
-                if (yMax - yMin < 10) {
-                    const mid = (maxValue + minValue) / 2;
-                    yMin = Math.max(0, mid - 5);
-                    yMax = Math.min(100, mid + 5);
-                }
+                yMin = 0;
+                yMax = 100;
             } else if (isBytes && maxValue >= 1024 * 1024) {
                 unit = 'MiB';
                 const minMiB = minValue / (1024 * 1024);
@@ -652,17 +634,29 @@ const STATS_TEMPLATE: &str = r###"
                 const rangeMiB = Math.max(maxMiB - minMiB, 0.1);
                 yMin = Math.max(0, minMiB - rangeMiB * 0.2);
                 yMax = maxMiB + rangeMiB * 0.2;
-                const step = Math.pow(10, Math.floor(Math.log10(rangeMiB))) / 2;
-                yMin = Math.floor(yMin / step) * step;
-                yMax = Math.ceil(yMax / step) * step;
-                if (yMax - yMin < step) yMax = yMin + step;
+                if (yMax - yMin < 0.1) yMax = yMin + 0.1;
             } else {
-                yMin = Math.max(0, minValue - range * 0.2);
-                yMax = maxValue + range * 0.2;
-                const step = Math.pow(10, Math.floor(Math.log10(range))) / 2;
-                yMin = Math.floor(yMin / step) * step;
-                yMax = Math.ceil(yMax / step) * step;
-                if (yMax - yMin < step) yMax = yMin + step;
+                // New logic to center the graph for non-percentage charts
+                const midPoint = (maxValue + minValue) / 2;
+                const valueRange = maxValue - minValue;
+
+                if (maxValue === 0) {
+                    yMin = 0;
+                    yMax = 10; // Default range for zero-line
+                } else if (valueRange < midPoint * 0.2 && midPoint > 0) {
+                    // If data is flat, create a viewport around the midpoint
+                    yMin = midPoint * 0.5;
+                    yMax = midPoint * 1.5;
+                } else {
+                    // If data is volatile, show the range with padding
+                    yMin = minValue - valueRange * 0.2;
+                    yMax = maxValue + valueRange * 0.2;
+                }
+            }
+            
+            yMin = Math.max(0, yMin);
+            if (yMax <= yMin) {
+                yMax = yMin + 10; // Ensure yMax is always greater than yMin
             }
 
             console.log(`Chart ${svgId} scaling: yMin=${yMin}, yMax=${yMax}, unit=${unit}, data=`, data);
@@ -689,16 +683,12 @@ const STATS_TEMPLATE: &str = r###"
                 if (i === 0) {
                     pathData += `M ${x.toFixed(2)},${y.toFixed(2)}`;
                 } else {
-                    const prevX = xScale(times[i - 1]);
-                    const prevY = yScale(data[i - 1]);
-                    pathData += ` H ${x.toFixed(2)} V ${y.toFixed(2)}`;
+                    pathData += ` L ${x.toFixed(2)},${y.toFixed(2)}`;
                 }
             }
 
             const path = svgElement.querySelector('.data-line');
-            if (path) {
-                path.setAttribute('d', pathData);
-            }
+            if (path) { path.setAttribute('d', pathData); }
 
             const xAxisGroup = svgElement.querySelector('.x-axis');
             const yAxisGroup = svgElement.querySelector('.y-axis');
@@ -733,9 +723,13 @@ const STATS_TEMPLATE: &str = r###"
                     text.setAttribute('y', y + 3);
                     text.setAttribute('text-anchor', 'end');
                     text.classList.add('y-axis-labels');
-                    text.textContent = isPercent ? `${Math.round(value)}%` :
+                    let label = "0";
+                    if (yMax > 0) {
+                         label = isPercent ? `${Math.round(value)}%` :
                                        unit === 'MiB' ? `${value.toFixed(1)} MiB` :
                                        formatWithThousands(Math.round(value));
+                    }
+                    text.textContent = label;
                     yAxisGroup.appendChild(text);
                 }
             }
@@ -889,7 +883,7 @@ const STATS_TEMPLATE: &str = r###"
 
                 const updates = {
                     uptime: formatUptime(latestStats.uptime),
-                    totalBytes: `${formatWithThousands(latestStats.total_bytes)} (${bytesToMiB(latestStats.total_bytes)})`,
+                    totalBytes: `${(latestStats.total_bytes).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')} (${bytesToMiB(latestStats.total_bytes)})`,
                     lastUpdated: formatTimestamp(latestStats.last_updated),
                     packetsReceived: formatWithThousands(packetsReceivedPerMin),
                     packetsSent: formatWithThousands(packetsSentPerMin),
