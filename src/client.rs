@@ -237,7 +237,7 @@ pub fn configure_client() -> Result<ClientConfig> {
 
     let mut transport_config = TransportConfig::default();
     transport_config
-        .max_idle_timeout(Some(Duration::from_secs(24 * 60 * 60).try_into().unwrap()))
+        .max_idle_timeout(Some(Duration::from_secs(30).try_into().unwrap()))
         .stream_receive_window(VarInt::from_u64(1_000_000).unwrap()) // 1MB per stream
         .max_concurrent_bidi_streams(VarInt::from_u64(100).unwrap());
 

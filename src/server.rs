@@ -87,7 +87,7 @@ pub async fn start_server(meta: Arc<Mutex<Metadata>>, stats: Arc<Mutex<Stats>>) 
         .route("/stats-page", get(get_stats_page))
         .with_state(app_state);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3500));
+    let addr = SocketAddr::from(([127, 0, 0, 1], 80));
     log::info!("Starting web server on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app.into_make_service()).await?;

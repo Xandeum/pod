@@ -1,5 +1,4 @@
 use anyhow::Result;
-use log::info;
 use pod::{
     client::{configure_client, start_stream_loop},
     logger::init_logger,
@@ -14,7 +13,7 @@ use tokio::{
     sync::{broadcast, Mutex},
 };
 
-const ATLAS_IP: &str = "65.108.233.175:5000";
+const ATLAS_IP: &str = "95.217.229.171:5000";
 // const ATLAS_IP: &str = "127.0.0.1:5000";
 
 
@@ -24,7 +23,7 @@ async fn main() -> Result<()> {
 
     let client_config = configure_client()?;
 
-    let mut endpoint = Endpoint::client(SocketAddr::from(([0, 0, 0, 0], 18268)))?;
+    let mut endpoint = Endpoint::client(SocketAddr::from(([0, 0, 0, 0], 5000)))?;
 
     endpoint.set_default_client_config(client_config);
     let addr = SocketAddr::from_str(ATLAS_IP)?;

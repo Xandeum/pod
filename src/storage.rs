@@ -305,7 +305,7 @@ impl StorageState {
                 op: Operation::Poke,
                 page_no: page_id,
                 offset,
-                length: data.len() as u32,
+                length: length,
                 chunk_seq: 0,
                 total_chunks: 1,
             },

@@ -48,8 +48,8 @@ impl Packet {
         data: Vec<u8>,
         chunk_seq: u32,
         total_chunks: u32,
+        length: u32,
     ) -> Self {
-        let length = data.len() as u32;
         Packet {
             meta: Meta {
                 op: Operation::Poke,
@@ -109,6 +109,7 @@ pub fn split_packet(packet: Packet) -> Vec<Packet> {
 
     let mut packets = Vec::new();
     let page_no = packet.meta.page_no;
+    let length = packet.meta.length;
     // Note : This offset is used for Peek/Poke of a Page, It does not
     // relate to offset of split data.The Split data order is only determined by the chunk_seq.
     let base_offset = packet.meta.offset;
@@ -120,8 +121,14 @@ pub fn split_packet(packet: Packet) -> Vec<Packet> {
         chunk_vec.resize(MAX_DATA_IN_PACKET, 0);
 
         let chunk_offset = base_offset;
-        let chunk_packet =
-            Packet::new_poke(page_no, chunk_offset, chunk_vec, i as u32, total_chunks);
+        let chunk_packet = Packet::new_poke(
+            page_no,
+            chunk_offset,
+            chunk_vec,
+            i as u32,
+            total_chunks,
+            length,
+        );
         packets.push(chunk_packet);
     }
     packets
