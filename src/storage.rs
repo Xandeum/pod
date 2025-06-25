@@ -17,9 +17,9 @@ use tokio::{
 use crate::client::send_packets;
 use crate::packet::{AtlasOperation, Meta, Packet, MAX_DATA_IN_PACKET};
 use crate::protos::{
-    ArmageddonData, BigBangData, DirectoryEntry, DirectoryEntryPage, FileSystemRecord,
-    GlobalCatalogPage, Inode, MkDirPayload, PeekPayload, PodMapping, PodMappingsPage, RmDirPayload,
-    XentriesPage, XentryMapping,
+    ArmageddonData, BigBangData, CreateFilePayload, DirectoryEntry, DirectoryEntryPage,
+    FileSystemRecord, GlobalCatalogPage, Inode, MkDirPayload, PeekPayload, PodMapping,
+    PodMappingsPage, RmDirPayload, RmFilePayload, XentriesPage, XentryMapping,
 };
 use crate::stats::Stats;
 use common::consts::PAGE_SIZE;
@@ -947,6 +947,33 @@ impl StorageState {
             }
         }
 
+        Ok(())
+    }
+
+    pub async fn handle_create_file(self, data: CreateFilePayload) -> Result<()> {
+        let mut global_meta = self.metadata.lock().await;
+        let mut global_index = self.index.lock().await;
+
+        match data.new_inode {
+            Some(inode) => {
+                let local_index = global_meta.current_index;
+
+                global_index.index.insert(inode.pages[0], local_index);
+                global_meta.current_index += 1;
+
+                self.write_object(&inode, &[0u8], local_index).await?;
+
+                self.write(PAGE_SIZE, &global_meta.to_bytes()?).await?;
+                self.write(PAGE_SIZE + Metadata::size(), &global_index.to_bytes()?)
+                    .await?;
+            }
+            None => {}
+        }
+
+        Ok(())
+    }
+
+    pub async fn handle_delete_file(self, data: RmFilePayload) -> Result<()> {
         Ok(())
     }
 
