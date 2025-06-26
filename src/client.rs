@@ -135,7 +135,7 @@ async fn receive_packets(
                 if packets_chunks.is_empty() {
                     expected_total_chunks = packet.meta.total_chunks;
                 }
-                info!("receuved packet : {:?}",packet);
+                info!("receuved packet : {:?}", packet);
 
                 packets_chunks.push(packet);
 
@@ -214,8 +214,13 @@ pub fn configure_client() -> Result<ClientConfig> {
         .install_default()
         .map_err(|e| anyhow::anyhow!("Failed to install CryptoProvider: {:?}", e))?;
 
-    let cert_file = File::open("server.crt")?;
-    let mut cert_reader = BufReader::new(cert_file);
+    // let cert_file = File::open("server.crt")?;
+    // let mut cert_reader = BufReader::new(cert_file);
+    // let certs: Vec<CertificateDer<'_>> =
+    // certs(&mut cert_reader).collect::<Result<_, std::io::Error>>()?;
+
+    let cert_pem = include_str!("../server.crt");
+    let mut cert_reader = BufReader::new(cert_pem.as_bytes());
     let certs: Vec<CertificateDer<'_>> =
         certs(&mut cert_reader).collect::<Result<_, std::io::Error>>()?;
 
