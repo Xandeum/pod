@@ -15,7 +15,9 @@ use tokio::time::sleep;
 
 use crate::cert::AcceptAllVerifier;
 use crate::packet::{reassemble_packets, split_packet, AtlasOperation, Packet, MAX_PACKET_SIZE};
-use crate::protos::{ArmageddonData, BigBangData, MkDirPayload, RmDirPayload};
+use crate::protos::{
+    ArmageddonData, BigBangData, MkDirPayload, PeekData, PokePayload, RmDirPayload,
+};
 use crate::stats::Stats;
 use crate::storage::StorageState;
 
@@ -124,12 +126,16 @@ async fn handle_stream(
 
                 AtlasOperation::PPeek => {
                     // Handle peek and send response
+                    let peek_data: PeekData = deserialize(&packet.data)?;
+
                     let _ = storage_state
-                        .handle_peek(sender.clone(), packet, stats.clone())
+                        .handle_peek(sender.clone(), peek_data, stats.clone())
                         .await;
                 }
                 AtlasOperation::PPoke => {
-                    let _ = storage_state.handle_poke(packet).await;
+                    let poke_data: PokePayload = deserialize(&packet.data)?;
+
+                    let _ = storage_state.handle_poke(poke_data, stats.clone()).await;
                 }
                 AtlasOperation::Cache => {
                     let _ = storage_state

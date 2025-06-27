@@ -18,8 +18,8 @@ use crate::client::send_packets;
 use crate::packet::{AtlasOperation, Meta, Packet, MAX_DATA_IN_PACKET};
 use crate::protos::{
     ArmageddonData, BigBangData, CreateFilePayload, DirectoryEntry, DirectoryEntryPage,
-    FileSystemRecord, GlobalCatalogPage, Inode, MkDirPayload, PeekPayload, PodMapping,
-    PodMappingsPage, RmDirPayload, RmFilePayload, XentriesPage, XentryMapping,
+    FileSystemRecord, GlobalCatalogPage, Inode, MkDirPayload, PeekData, PeekPayload, PodMapping,
+    PodMappingsPage, PokePayload, RmDirPayload, RmFilePayload, XentriesPage, XentryMapping,
 };
 use crate::stats::Stats;
 use common::consts::PAGE_SIZE;
@@ -417,6 +417,28 @@ impl StorageState {
         self.read(page_offset, PAGE_SIZE as usize).await
     }
 
+    pub async fn read_page_data(
+        &self,
+        page_no: u64,
+        offset: u64,
+        length: usize,
+    ) -> Result<Vec<u8>> {
+        let page_bytes = self.read_page(page_no).await?;
+
+        let start = offset as usize + INODE_METADATA_SIZE as usize;
+        let end = start + length;
+        if end > page_bytes.len() {
+            return Err(anyhow!(
+                "Requested range ({} to {}) exceeds page size {}",
+                start,
+                end,
+                page_bytes.len()
+            ));
+        }
+
+        Ok(page_bytes[start..end].to_vec())
+    }
+
     pub async fn get_inode(&self, page_no: u64) -> Result<Inode> {
         let page_bytes = self.read_page(page_no).await?;
 
@@ -452,8 +474,33 @@ impl StorageState {
         Ok(dir_page)
     }
 
-    pub async fn handle_poke(&self, packet: Packet) -> Result<()> {
+    pub async fn handle_poke(&self, data: PokePayload, stats: Arc<Mutex<Stats>>) -> Result<()> {
         info!("poking");
+
+        let mut global_meta = self.metadata.lock().await;
+        let mut global_index = self.index.lock().await;
+
+        match data.parent_file_inode {
+            Some(inode) => {
+                let local_index = global_meta.current_index;
+
+                global_index.index.insert(inode.pages[0], local_index);
+                global_meta.current_index += 1;
+
+                self.write_object(&inode, &[0u8], local_index).await?;
+
+                self.write(PAGE_SIZE, &global_meta.to_bytes()?).await?;
+                self.write(PAGE_SIZE + Metadata::size(), &global_index.to_bytes()?)
+                    .await?;
+            }
+            None => {
+                info!("Inode not Present, Checking Poke operation");
+            }
+        }
+
+        let local_page = global_index.index.get(&data.page_no).unwrap();
+
+        // Checking For Update on Parent inode
 
         // let page_id = packet.meta.page_no;
         // let offset = packet.meta.offset;
@@ -506,10 +553,26 @@ impl StorageState {
     pub async fn handle_peek(
         &self,
         sender: Arc<Mutex<SendStream>>,
-        packet: Packet,
+        data: PeekData,
         stats: Arc<Mutex<Stats>>,
     ) -> Result<()> {
         info!("Handling peek");
+
+        let data = self
+            .read_page_data(data.page_no, data.offset, data.length as usize)
+            .await?;
+
+        // // Create response packet
+        let response_packet = Packet {
+            meta: Some(Meta {
+                op: AtlasOperation::PPeek as i32,
+                chunk_seq: 0,
+                total_chunks: 1,
+            }),
+            data,
+        };
+
+        send_packets(sender, response_packet, stats.clone()).await?;
 
         // let page_id = packet.meta.page_no;
         // let offset = packet.meta.offset;
@@ -967,13 +1030,159 @@ impl StorageState {
                 self.write(PAGE_SIZE + Metadata::size(), &global_index.to_bytes()?)
                     .await?;
             }
-            None => {}
+            None => {
+                info!("Inode not Present, Checking parent");
+            }
+        }
+
+        match (data.parent_inode, data.directory_entery_parent) {
+            (None, None) => {
+                info!("No parent inode or parent directory entry present")
+            }
+            (None, _) => return Err(anyhow::anyhow!("Missing updated parent_inode")),
+            (_, None) => return Err(anyhow::anyhow!("Missing parent directory_entry")),
+            (Some(inode), Some(entry)) => {
+                let global_index = self.index.lock().await;
+
+                let local_page = global_index.index.get(&inode.pages[0]).unwrap();
+
+                let mut dir_entry_page = self.get_directory_page(*local_page).await?;
+
+                dir_entry_page.entries.push(entry);
+
+                self.write_object(&inode, &serialize(&dir_entry_page)?, *local_page)
+                    .await?;
+            }
+        }
+
+        // Update root of File system, Check if it exists here
+        match (
+            data.xentires_inode,
+            data.xentry_mapping,
+            data.pod_mapping_inode,
+            data.pods_mapping,
+        ) {
+            (Some(inode1), Some(entry1), Some(inode2), Some(entry2)) => {
+                let global_index = self.index.lock().await;
+
+                // Update first entry
+                let xentries_local_page = global_index
+                    .index
+                    .get(&inode1.pages[0])
+                    .ok_or_else(|| anyhow::anyhow!("Invalid page reference in xentires_inode"))?;
+                let mut dir_entry_page1 = self.get_xentries_page(*xentries_local_page).await?;
+                dir_entry_page1.mappings.push(entry1);
+
+                self.write_object(&inode1, &serialize(&dir_entry_page1)?, *xentries_local_page)
+                    .await?;
+
+                // Update second entry
+                let local_page2 = global_index.index.get(&inode2.pages[0]).ok_or_else(|| {
+                    anyhow::anyhow!("Invalid page reference in pod_mapping_inode")
+                })?;
+                let mut dir_entry_page2 = self.get_pod_mappings_page(*local_page2).await?;
+                dir_entry_page2.mappings.push(entry2);
+                self.write_object(&inode2, &serialize(&dir_entry_page2)?, *local_page2)
+                    .await?;
+            }
+            (None, None, None, None) => {
+                info!("No parent inode or directory entry data present");
+            }
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Partial parent update: all of xentires_inode, xentry_mapping, pod_mapping_inode, and pods_mapping must be present"
+                ));
+            }
         }
 
         Ok(())
     }
 
     pub async fn handle_delete_file(self, data: RmFilePayload) -> Result<()> {
+        let pages = data.pages;
+
+        let mut global_meta = self.metadata.lock().await;
+        let mut global_index = self.index.lock().await;
+
+        for page in pages {
+            let local_index = global_index
+                .index
+                .remove(&page)
+                .ok_or_else(|| anyhow!("Page  {} is not stored on This Pod ", page))?;
+
+            self.clear_page(local_index).await?;
+        }
+
+        info!("Cleared pages !");
+
+        match (data.inode, data.directory_entery) {
+            (None, None) => {
+                info!("No inode or directory entry present")
+            }
+            (None, _) => return Err(anyhow::anyhow!("Missing new_inode")),
+            (_, None) => return Err(anyhow::anyhow!("Missing directory_entery")),
+            (Some(inode), Some(dir_entry)) => {
+                let mut dir_entry_page = self.get_directory_page(inode.pages[0]).await?;
+
+                dir_entry_page
+                    .entries
+                    .retain(|entry| entry.inode_no != dir_entry.inode_no);
+
+                let local_index = global_meta.current_index;
+
+                self.write_object(&inode, &serialize(&dir_entry_page)?, local_index)
+                    .await?;
+            }
+        }
+
+        // Update root of File system, Check if it exists here
+        match (data.xentires_inode, data.pod_mapping_inode) {
+            (Some(inode1), Some(inode2)) => {
+                let global_index = self.index.lock().await;
+
+                let xentires = data.xentry_mapping;
+                let mappings = data.pods_mapping;
+
+                // Update first entry
+                let xentries_local_page = global_index
+                    .index
+                    .get(&inode1.pages[0])
+                    .ok_or_else(|| anyhow::anyhow!("Invalid page reference in xentires_inode"))?;
+                let mut dir_entry_page1 = self.get_xentries_page(*xentries_local_page).await?;
+
+                for mapping in xentires {
+                    dir_entry_page1
+                        .mappings
+                        .retain(|entry| entry.inode_no != mapping.inode_no);
+                }
+
+                self.write_object(&inode1, &serialize(&dir_entry_page1)?, *xentries_local_page)
+                    .await?;
+
+                // Update second entry
+                let local_page2 = global_index.index.get(&inode2.pages[0]).ok_or_else(|| {
+                    anyhow::anyhow!("Invalid page reference in pod_mapping_inode")
+                })?;
+                let mut dir_entry_page2 = self.get_pod_mappings_page(*local_page2).await?;
+
+                for mapping in mappings {
+                    dir_entry_page2
+                        .mappings
+                        .retain(|entry| entry.logical_page != mapping.logical_page);
+                }
+
+                self.write_object(&inode2, &serialize(&dir_entry_page2)?, *local_page2)
+                    .await?;
+            }
+            (None, None) => {
+                info!("No parent inode or directory entry data present");
+            }
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Partial parent update: all of xentires_inode, xentry_mapping, pod_mapping_inode, and pods_mapping must be present"
+                ));
+            }
+        }
         Ok(())
     }
 
