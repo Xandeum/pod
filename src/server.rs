@@ -2,10 +2,7 @@ use anyhow::Result;
 use axum::{extract::State, response::Html, routing::get, Json, Router};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use std::{
-    net::SocketAddr,
-    sync::Arc,
-};
+use std::{net::SocketAddr, sync::Arc};
 use tokio::{fs::OpenOptions, sync::Mutex};
 
 use crate::{
@@ -25,12 +22,12 @@ async fn root() -> Json<ApiResponse> {
 }
 
 async fn get_stats(state: State<AppState>) -> Json<CombinedStats> {
-
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
         .open(FILE_PATH)
-        .await.unwrap();
+        .await
+        .unwrap();
     let file_size = file.metadata().await.unwrap().len();
 
     let metadata = state.meta.lock().await;
@@ -38,12 +35,11 @@ async fn get_stats(state: State<AppState>) -> Json<CombinedStats> {
     Json(CombinedStats {
         metadata: metadata.clone(),
         stats: stats.clone(),
-        file_size
+        file_size,
     })
 }
 
 async fn get_stats_page(state: State<AppState>) -> Html<String> {
-    
     let metadata = state.meta.lock().await;
     let stats = state.stats.lock().await;
 
@@ -82,9 +78,9 @@ pub async fn start_server(meta: Arc<Mutex<Metadata>>, stats: Arc<Mutex<Stats>>) 
     let app_state = AppState { meta, stats };
 
     let app = Router::new()
-        .route("/", get(root))
-        .route("/stats", get(get_stats))
-        .route("/stats-page", get(get_stats_page))
+        .route("/", get(get_stats_page))
+        // .route("/stats", get(get_stats))
+        // .route("/stats-page", get(get_stats_page))
         .with_state(app_state);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 80));
