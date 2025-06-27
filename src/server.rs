@@ -79,7 +79,7 @@ pub async fn start_server(meta: Arc<Mutex<Metadata>>, stats: Arc<Mutex<Stats>>) 
 
     let app = Router::new()
         .route("/", get(get_stats_page))
-        // .route("/stats", get(get_stats))
+        .route("/stats", get(get_stats))
         // .route("/stats-page", get(get_stats_page))
         .with_state(app_state);
 
