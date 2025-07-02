@@ -16,9 +16,15 @@ use tokio::{
 const ATLAS_IP: &str = "95.217.229.171:5000";
 // const ATLAS_IP: &str = "127.0.0.1:5000";
 
-
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+
+    if args.len() > 1 && args[1] == "--version" {
+        println!("pod {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     let _ = init_logger();
 
     let client_config = configure_client()?;
