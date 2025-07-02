@@ -17,9 +17,9 @@ use crate::client::send_packets;
 use crate::packet::{AtlasOperation, Meta, Packet, MAX_DATA_IN_PACKET};
 use crate::protos::{
     ArmageddonData, BigBangData, CachePayload, CreateFilePayload, DirectoryEntry,
-    DirectoryEntryPage, FileSystemRecord, GlobalCatalogPage, Inode, MkDirPayload, PeekPayload,
-    PodMapping, PodMappingsPage, PokePayload, RenamePayload, RmDirPayload, RmFilePayload,
-    XentriesPage, XentryMapping,
+    DirectoryEntryPage, FileSystemRecord, GlobalCatalogPage, Inode, MkDirPayload, MovePayload,
+    PeekPayload, PodMapping, PodMappingsPage, PokePayload, RenamePayload, RmDirPayload,
+    RmFilePayload, XentriesPage, XentryMapping,
 };
 use crate::stats::Stats;
 use common::consts::PAGE_SIZE;
@@ -1243,6 +1243,53 @@ impl StorageState {
                 dir_entry_page
                     .entries
                     .retain(|entry| entry.inode_no != entry.inode_no);
+
+                dir_entry_page.entries.push(entry);
+
+                self.write_object(&inode, &serialize(&dir_entry_page)?, *local_page)
+                    .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn handle_move(self, data: MovePayload) -> Result<()> {
+        let mut global_meta = self.metadata.lock().await;
+        let mut global_index = self.index.lock().await;
+
+        match (data.old_directory_inode, data.old_directory_entry) {
+            (None, None) => {
+                info!("No inode or directory entry present")
+            }
+            (None, _) => return Err(anyhow::anyhow!("Missing old_inode")),
+            (_, None) => return Err(anyhow::anyhow!("Missing directory_entry")),
+            (Some(inode), Some(dir_entry)) => {
+                let mut dir_entry_page = self.get_directory_page(inode.pages[0]).await?;
+
+                dir_entry_page
+                    .entries
+                    .retain(|entry| entry.inode_no != dir_entry.inode_no);
+
+                let local_index = global_meta.current_index;
+
+                self.write_object(&inode, &serialize(&dir_entry_page)?, local_index)
+                    .await?;
+            }
+        }
+
+        match (data.new_directory_inode, data.new_directory_entry) {
+            (None, None) => {
+                info!("No inode or directory entry present")
+            }
+            (None, _) => return Err(anyhow::anyhow!("Missing updated inode")),
+            (_, None) => return Err(anyhow::anyhow!("Missing directory_entry")),
+            (Some(inode), Some(entry)) => {
+                let global_index = self.index.lock().await;
+
+                let local_page = global_index.index.get(&inode.pages[0]).unwrap();
+
+                let mut dir_entry_page = self.get_directory_page(*local_page).await?;
 
                 dir_entry_page.entries.push(entry);
 
