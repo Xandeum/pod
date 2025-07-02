@@ -4,7 +4,6 @@ use chrono::Utc;
 use log::{debug, info};
 use quinn::SendStream;
 use serde::{Deserialize, Serialize};
-use std::error;
 use std::io::ErrorKind;
 use std::sync::Arc;
 use std::{collections::HashMap, io::Error};
@@ -17,9 +16,10 @@ use tokio::{
 use crate::client::send_packets;
 use crate::packet::{AtlasOperation, Meta, Packet, MAX_DATA_IN_PACKET};
 use crate::protos::{
-    ArmageddonData, BigBangData, CreateFilePayload, DirectoryEntry, DirectoryEntryPage,
-    FileSystemRecord, GlobalCatalogPage, Inode, MkDirPayload, PeekData, PeekPayload, PodMapping,
-    PodMappingsPage, PokePayload, RmDirPayload, RmFilePayload, XentriesPage, XentryMapping,
+    ArmageddonData, BigBangData, CachePayload, CreateFilePayload, DirectoryEntry,
+    DirectoryEntryPage, FileSystemRecord, GlobalCatalogPage, Inode, MkDirPayload, PeekPayload,
+    PodMapping, PodMappingsPage, PokePayload, RenamePayload, RmDirPayload, RmFilePayload,
+    XentriesPage, XentryMapping,
 };
 use crate::stats::Stats;
 use common::consts::PAGE_SIZE;
@@ -498,7 +498,47 @@ impl StorageState {
             }
         }
 
-        let local_page = global_index.index.get(&data.page_no).unwrap();
+        let local_page_index = match global_index.index.get(&data.page_no) {
+            Some(local_index) => *local_index,
+            None => {
+                return Err(anyhow!(
+                    "Page number {} not found in the index.",
+                    data.page_no
+                ))
+            }
+        };
+
+        self.write(PAGE_SIZE, &global_meta.to_bytes()?).await?;
+        self.write(PAGE_SIZE + Metadata::size(), &global_index.to_bytes()?)
+            .await?;
+
+        let base_data_area_offset = PAGE_SIZE + Metadata::size() + Index::size();
+        let physical_offset = base_data_area_offset + (local_page_index * PAGE_SIZE) + data.offset;
+
+        self.write(physical_offset, &data.data).await?;
+
+        match (data.pod_mapping_inode, data.pods_mapping) {
+            (Some(inode), Some(entry)) => {
+                let global_index = self.index.lock().await;
+
+                // Update second entry
+                let local_page = global_index.index.get(&inode.pages[0]).ok_or_else(|| {
+                    anyhow::anyhow!("Invalid page reference in pod_mapping_inode")
+                })?;
+                let mut dir_entry_page = self.get_pod_mappings_page(*local_page).await?;
+                dir_entry_page.mappings.push(entry);
+                self.write_object(&inode, &serialize(&dir_entry_page)?, *local_page)
+                    .await?;
+            }
+            (None, None) => {
+                info!("No parent inode or directory entry data present");
+            }
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Partial parent update:  pod_mapping_inode, and pods_mapping must be present"
+                ));
+            }
+        }
 
         // Checking For Update on Parent inode
 
@@ -553,7 +593,7 @@ impl StorageState {
     pub async fn handle_peek(
         &self,
         sender: Arc<Mutex<SendStream>>,
-        data: PeekData,
+        data: PeekPayload,
         stats: Arc<Mutex<Stats>>,
     ) -> Result<()> {
         info!("Handling peek");
@@ -649,7 +689,7 @@ impl StorageState {
         sender: Arc<Mutex<SendStream>>,
         stats: Arc<Mutex<Stats>>,
     ) -> Result<()> {
-        let payload: PeekPayload = deserialize(&packet.data).unwrap();
+        let payload: CachePayload = deserialize(&packet.data).unwrap();
 
         let pages = payload.pages;
 
@@ -1183,6 +1223,34 @@ impl StorageState {
                 ));
             }
         }
+        Ok(())
+    }
+
+    pub async fn handle_rename(self, data: RenamePayload) -> Result<()> {
+        match (data.directory_inode, data.directory_entry) {
+            (None, None) => {
+                info!("No parent inode or parent directory entry present")
+            }
+            (None, _) => return Err(anyhow::anyhow!("Missing updated parent_inode")),
+            (_, None) => return Err(anyhow::anyhow!("Missing parent directory_entry")),
+            (Some(inode), Some(entry)) => {
+                let global_index = self.index.lock().await;
+
+                let local_page = global_index.index.get(&inode.pages[0]).unwrap();
+
+                let mut dir_entry_page = self.get_directory_page(*local_page).await?;
+
+                dir_entry_page
+                    .entries
+                    .retain(|entry| entry.inode_no != entry.inode_no);
+
+                dir_entry_page.entries.push(entry);
+
+                self.write_object(&inode, &serialize(&dir_entry_page)?, *local_page)
+                    .await?;
+            }
+        }
+
         Ok(())
     }
 
