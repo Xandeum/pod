@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use bincode::{deserialize, serialize};
 use chrono::Utc;
+use core::error;
 use log::{debug, info};
 use quinn::SendStream;
 use serde::{Deserialize, Serialize};
@@ -24,7 +25,7 @@ use crate::protos::{
 use crate::stats::Stats;
 use common::consts::PAGE_SIZE;
 
-pub const FILE_PATH: &str = "xandeum-pod";
+pub const FILE_PATH: &str = "xandeum-podd";
 const INODE_METADATA_SIZE: u64 = 1024;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -39,7 +40,7 @@ pub enum PageDataType {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 
 pub struct PeekResponse {
-    response: HashMap<u64, PageDataType>,
+    response: HashMap<u64, Vec<PageDataType>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -179,6 +180,42 @@ impl StorageState {
         } else {
             Index::from_bytes(&index_bytes)?
         };
+
+        file.seek(SeekFrom::Start(0)).await?;
+
+        let mut cat_bytes = vec![0u8; PAGE_SIZE as usize];
+
+        file.read_exact(&mut cat_bytes).await?;
+
+        let end = cat_bytes.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+
+        info!("end : {:?}", end);
+
+        info!("cat bytes ; {:?}", &cat_bytes[..end]);
+
+        match deserialize::<GlobalCatalogPage>(&cat_bytes) {
+            Ok(cat) => {
+                info!("catalog : {:?}", cat);
+            }
+            Err(e) => {
+                info!("failed to deserialize catalog : {:?}", e);
+                let cat = GlobalCatalogPage {
+                    filesystems: vec![],
+                    next_catalog_page: 0,
+                };
+
+                let mut buf = serialize(&cat)?;
+                file.seek(SeekFrom::Start(0)).await?;
+
+                buf.resize(PAGE_SIZE as usize, 0);
+                info!("writing catalog");
+                file.write_all(&buf).await?;
+                info!("flush");
+
+                file.flush().await?;
+            }
+        }
+
         Ok(StorageState {
             file: Arc::new(Mutex::new(file)),
             metadata: Arc::new(Mutex::new(metadata)),
@@ -186,188 +223,189 @@ impl StorageState {
         })
     }
 
-    pub async fn bootstrap_dummy_filesystem(&self, fs_id: u64, pod_id_str: &str) -> Result<()> {
-        info!("Bootstrapping dummy filesystem with ID: {}", fs_id);
+    // pub async fn bootstrap_dummy_filesystem(&self, fs_id: u64, pod_id_str: &str) -> Result<()> {
+    //     info!("Bootstrapping dummy filesystem with ID: {}", fs_id);
 
-        // First, check if this filesystem already exists
-        if self
-            .clone()
-            .read_catalog()
-            .await?
-            .filesystems
-            .iter()
-            .any(|fs| fs.fs_id == fs_id)
-        {
-            return Err(anyhow!("Filesystem with ID {} already exists.", fs_id));
-        }
+    //     // First, check if this filesystem already exists
+    //     if self
+    //         .clone()
+    //         .read_catalog()
+    //         .await?
+    //         .filesystems
+    //         .iter()
+    //         .any(|fs| fs.fs_id == fs_id)
+    //     {
+    //         return Err(anyhow!("Filesystem with ID {} already exists.", fs_id));
+    //     }
 
-        let mut metadata = self.metadata.lock().await;
-        let mut index_map = self.index.lock().await;
+    //     let mut metadata = self.metadata.lock().await;
+    //     let mut index_map = self.index.lock().await;
 
-        // --- 1. Define Inodes and Page IDs ---
-        // We need 5 new pages for this filesystem.
-        let base_local_idx = metadata.current_index;
-        let base_global_page_id = fs_id * 1000; // Simple scheme to avoid collisions
+    //     // --- 1. Define Inodes and Page IDs ---
+    //     // We need 5 new pages for this filesystem.
+    //     let base_local_idx = metadata.current_index;
+    //     let base_global_page_id = fs_id * 1000; // Simple scheme to avoid collisions
 
-        let root_inode_no = 1;
-        let docs_inode_no = 2;
-        let file1_inode_no = 3;
-        let xentries_inode_no = 4;
-        let pod_map_inode_no = 5;
+    //     let root_inode_no = 1;
+    //     let docs_inode_no = 2;
+    //     let file1_inode_no = 3;
+    //     let xentries_inode_no = 4;
+    //     let pod_map_inode_no = 5;
 
-        let root_page_id = base_global_page_id + 1;
-        let docs_page_id = base_global_page_id + 2;
-        let file1_page_id = base_global_page_id + 3;
-        let xentries_page_id = base_global_page_id + 4;
-        let pod_map_page_id = base_global_page_id + 5;
+    //     let root_page_id = base_global_page_id + 1;
+    //     let docs_page_id = base_global_page_id + 2;
+    //     let file1_page_id = base_global_page_id + 3;
+    //     let xentries_page_id = base_global_page_id + 4;
+    //     let pod_map_page_id = base_global_page_id + 5;
 
-        let mut root_inode = Inode::new(root_inode_no, "system".to_string(), true, false);
-        root_inode.pages = vec![root_page_id];
+    //     let mut root_inode = Inode::new(root_inode_no, "system".to_string(), true, false);
+    //     root_inode.pages = vec![root_page_id];
 
-        let mut docs_inode = Inode::new(docs_inode_no, "system".to_string(), true, false);
-        docs_inode.pages = vec![docs_page_id];
+    //     let mut docs_inode = Inode::new(docs_inode_no, "system".to_string(), true, false);
+    //     docs_inode.pages = vec![docs_page_id];
 
-        let mut file1_inode = Inode::new(file1_inode_no, "system".to_string(), false, false);
-        file1_inode.pages = vec![file1_page_id];
+    //     let mut file1_inode = Inode::new(file1_inode_no, "system".to_string(), false, false);
+    //     file1_inode.pages = vec![file1_page_id];
 
-        let mut xentries_inode = Inode::new(xentries_inode_no, "system".to_string(), false, true);
-        xentries_inode.pages = vec![xentries_page_id];
+    //     let mut xentries_inode = Inode::new(xentries_inode_no, "system".to_string(), false, true);
+    //     xentries_inode.pages = vec![xentries_page_id];
 
-        let mut pod_map_inode = Inode::new(pod_map_inode_no, "system".to_string(), false, true);
-        pod_map_inode.pages = vec![pod_map_page_id];
+    //     let mut pod_map_inode = Inode::new(pod_map_inode_no, "system".to_string(), false, true);
+    //     pod_map_inode.pages = vec![pod_map_page_id];
 
-        // --- 2. Define Page Contents ---
-        let root_dir_content = DirectoryEntryPage {
-            entries: vec![DirectoryEntry {
-                name: "docs".to_string(),
-                inode_no: docs_inode_no,
-            }],
-        };
-        let docs_dir_content = DirectoryEntryPage {
-            entries: vec![DirectoryEntry {
-                name: "file1.txt".to_string(),
-                inode_no: file1_inode_no,
-            }],
-        };
-        let file1_content = b"Hello from a dummy file in a bootstrapped filesystem!";
+    //     // --- 2. Define Page Contents ---
+    //     let root_dir_content = DirectoryEntryPage {
+    //         entries: vec![DirectoryEntry {
+    //             name: "docs".to_string(),
+    //             inode_no: docs_inode_no,
+    //         }],
+    //     };
+    //     let docs_dir_content = DirectoryEntryPage {
+    //         entries: vec![DirectoryEntry {
+    //             name: "file1.txt".to_string(),
+    //             inode_no: file1_inode_no,
+    //         }],
+    //     };
+    //     let file1_content = b"Hello from a dummy file in a bootstrapped filesystem!";
 
-        let xentries_content = XentriesPage {
-            mappings: vec![
-                XentryMapping {
-                    inode_no: root_inode_no,
-                    start_page_number: root_page_id,
-                },
-                XentryMapping {
-                    inode_no: docs_inode_no,
-                    start_page_number: docs_page_id,
-                },
-                XentryMapping {
-                    inode_no: file1_inode_no,
-                    start_page_number: file1_page_id,
-                },
-                XentryMapping {
-                    inode_no: xentries_inode_no,
-                    start_page_number: xentries_page_id,
-                },
-                XentryMapping {
-                    inode_no: pod_map_inode_no,
-                    start_page_number: pod_map_page_id,
-                },
-            ],
-        };
+    //     let xentries_content = XentriesPage {
+    //         mappings: vec![
+    //             XentryMapping {
+    //                 inode_no: root_inode_no,
+    //                 start_page_number: root_page_id,
+    //             },
+    //             XentryMapping {
+    //                 inode_no: docs_inode_no,
+    //                 start_page_number: docs_page_id,
+    //             },
+    //             XentryMapping {
+    //                 inode_no: file1_inode_no,
+    //                 start_page_number: file1_page_id,
+    //             },
+    //             XentryMapping {
+    //                 inode_no: xentries_inode_no,
+    //                 start_page_number: xentries_page_id,
+    //             },
+    //             XentryMapping {
+    //                 inode_no: pod_map_inode_no,
+    //                 start_page_number: pod_map_page_id,
+    //             },
+    //         ],
+    //     };
 
-        let pod_mappings_content = PodMappingsPage {
-            mappings: vec![
-                PodMapping {
-                    logical_page: root_page_id,
-                    pod_id: pod_id_str.to_string(),
-                },
-                PodMapping {
-                    logical_page: docs_page_id,
-                    pod_id: pod_id_str.to_string(),
-                },
-                PodMapping {
-                    logical_page: file1_page_id,
-                    pod_id: pod_id_str.to_string(),
-                },
-                PodMapping {
-                    logical_page: xentries_page_id,
-                    pod_id: pod_id_str.to_string(),
-                },
-                PodMapping {
-                    logical_page: pod_map_page_id,
-                    pod_id: pod_id_str.to_string(),
-                },
-            ],
-        };
+    //     let pod_mappings_content = PodMappingsPage {
+    //         mappings: vec![
+    //             PodMapping {
+    //                 logical_page: root_page_id,
+    //                 pod_id: pod_id_str.to_string(),
+    //             },
+    //             PodMapping {
+    //                 logical_page: docs_page_id,
+    //                 pod_id: pod_id_str.to_string(),
+    //             },
+    //             PodMapping {
+    //                 logical_page: file1_page_id,
+    //                 pod_id: pod_id_str.to_string(),
+    //             },
+    //             PodMapping {
+    //                 logical_page: xentries_page_id,
+    //                 pod_id: pod_id_str.to_string(),
+    //             },
+    //             PodMapping {
+    //                 logical_page: pod_map_page_id,
+    //                 pod_id: pod_id_str.to_string(),
+    //             },
+    //         ],
+    //     };
 
-        // --- 3. Write objects to disk ---
-        self.write_object(&root_inode, &serialize(&root_dir_content)?, base_local_idx)
-            .await?;
-        self.write_object(
-            &docs_inode,
-            &serialize(&docs_dir_content)?,
-            base_local_idx + 1,
-        )
-        .await?;
-        self.write_object(&file1_inode, file1_content, base_local_idx + 2)
-            .await?;
-        self.write_object(
-            &xentries_inode,
-            &serialize(&xentries_content)?,
-            base_local_idx + 3,
-        )
-        .await?;
-        self.write_object(
-            &pod_map_inode,
-            &serialize(&pod_mappings_content)?,
-            base_local_idx + 4,
-        )
-        .await?;
+    //     // --- 3. Write objects to disk ---
+    //     self.write_object(&root_inode, &serialize(&root_dir_content)?, base_local_idx)
+    //         .await?;
+    //     self.write_object(
+    //         &docs_inode,
+    //         &serialize(&docs_dir_content)?,
+    //         base_local_idx + 1,
+    //     )
+    //     .await?;
+    //     self.write_object(&file1_inode, file1_content, base_local_idx + 2)
+    //         .await?;
+    //     self.write_object(
+    //         &xentries_inode,
+    //         &serialize(&xentries_content)?,
+    //         base_local_idx + 3,
+    //     )
+    //     .await?;
+    //     self.write_object(
+    //         &pod_map_inode,
+    //         &serialize(&pod_mappings_content)?,
+    //         base_local_idx + 4,
+    //     )
+    //     .await?;
 
-        // --- 4. Update index and metadata ---
-        index_map.index.insert(root_page_id, base_local_idx);
-        index_map.index.insert(docs_page_id, base_local_idx + 1);
-        index_map.index.insert(file1_page_id, base_local_idx + 2);
-        index_map.index.insert(xentries_page_id, base_local_idx + 3);
-        index_map.index.insert(pod_map_page_id, base_local_idx + 4);
+    //     // --- 4. Update index and metadata ---
+    //     index_map.index.insert(root_page_id, base_local_idx);
+    //     index_map.index.insert(docs_page_id, base_local_idx + 1);
+    //     index_map.index.insert(file1_page_id, base_local_idx + 2);
+    //     index_map.index.insert(xentries_page_id, base_local_idx + 3);
+    //     index_map.index.insert(pod_map_page_id, base_local_idx + 4);
 
-        metadata.current_index += 5;
-        metadata.total_pages += 5;
-        metadata.last_updated = Utc::now().timestamp() as u64;
+    //     metadata.current_index += 5;
+    //     metadata.total_pages += 5;
+    //     metadata.last_updated = Utc::now().timestamp() as u64;
 
-        // --- 5. Create Filesystem Record and add to Catalog ---
-        let fs_record = FileSystemRecord {
-            fs_id,
-            home_pod_id: pod_id_str.to_string(),
-            root_inode_id: root_inode_no.to_string(),
-            xentries_start_page: xentries_page_id,
-            pod_mappings_start_page: pod_map_page_id,
-        };
+    //     // --- 5. Create Filesystem Record and add to Catalog ---
+    //     let fs_record = FileSystemRecord {
+    //         fs_id,
+    //         home_pod_id: pod_id_str.to_string(),
+    //         root_inode_id: root_inode_no.to_string(),
+    //         xentries_start_page: xentries_page_id,
+    //         pod_mappings_start_page: pod_map_page_id,
+    //         owner: "HI".to_string(),
+    //     };
 
-        // This must be done before we drop the locks
-        let catalog_bytes = {
-            let mut catalog =
-                self.clone()
-                    .read_catalog()
-                    .await
-                    .unwrap_or_else(|_| GlobalCatalogPage {
-                        filesystems: vec![],
-                        next_catalog_page: 0,
-                    });
-            catalog.filesystems.push(fs_record);
-            serialize(&catalog)?
-        };
+    //     // This must be done before we drop the locks
+    //     let catalog_bytes = {
+    //         let mut catalog =
+    //             self.clone()
+    //                 .read_catalog()
+    //                 .await
+    //                 .unwrap_or_else(|_| GlobalCatalogPage {
+    //                     filesystems: vec![],
+    //                     next_catalog_page: 0,
+    //                 });
+    //         catalog.filesystems.push(fs_record);
+    //         serialize(&catalog)?
+    //     };
 
-        // --- 6. Persist all metadata changes ---
-        self.write(0, &catalog_bytes).await?;
-        self.write(PAGE_SIZE, &metadata.to_bytes()?).await?;
-        self.write(PAGE_SIZE + Metadata::size(), &index_map.to_bytes()?)
-            .await?;
+    //     // --- 6. Persist all metadata changes ---
+    //     self.write(0, &catalog_bytes).await?;
+    //     self.write(PAGE_SIZE, &metadata.to_bytes()?).await?;
+    //     self.write(PAGE_SIZE + Metadata::size(), &index_map.to_bytes()?)
+    //         .await?;
 
-        info!("Successfully bootstrapped dummy filesystem ID: {}", fs_id);
-        Ok(())
-    }
+    //     info!("Successfully bootstrapped dummy filesystem ID: {}", fs_id);
+    //     Ok(())
+    // }
 
     async fn write(&self, offset: u64, data: &[u8]) -> Result<(), Error> {
         let mut file = self.file.lock().await;
@@ -380,6 +418,7 @@ impl StorageState {
             info!("error during writing file : {:?}", e);
             return Err(e);
         }
+        drop(file);
         Ok(())
     }
 
@@ -396,24 +435,56 @@ impl StorageState {
             )
         })?;
         debug!("Read {} bytes at offset {}", length, offset);
+        drop(file);
         Ok(buffer)
     }
 
     pub async fn read_page(&self, page_no: u64) -> Result<Vec<u8>> {
-        let index_map = self.index.lock().await;
+        info!("reading global page : {:?}", page_no);
+        let local_page_index = {
+            let index_map = self.index.lock().await;
+            info!("index : {:?}", index_map.index);
 
-        let local_page_index = match index_map.index.get(&page_no) {
-            Some(local_index) => *local_index,
-            None => return Err(anyhow!("Page number {} not found in the index.", page_no)),
+            match index_map.index.get(&page_no) {
+                Some(local_index) => *local_index,
+                None => return Err(anyhow!("Page number {} not found in the index.", page_no)),
+            }
         };
 
         let base_data_offset = PAGE_SIZE + Metadata::size() + Index::size();
+
         let page_offset = base_data_offset + (local_page_index * PAGE_SIZE);
 
         info!(
             "Reading page_no: {} (local index: {}) from offset: {}",
             page_no, local_page_index, page_offset
         );
+        // drop(index_map);
+        self.read(page_offset, PAGE_SIZE as usize).await
+    }
+
+    pub async fn read_page_index(&self, page_no: u64, local_page_index: u64) -> Result<Vec<u8>> {
+        // info!("1assd");
+        // let index_map = self.index.lock().await;
+
+        // info!("index locked");
+
+        // let local_page_index = match index_map.index.get(&page_no) {
+        //     Some(local_index) => *local_index,
+        //     None => return Err(anyhow!("Page number {} not found in the index.", page_no)),
+        // };
+        info!("1");
+
+        let base_data_offset = PAGE_SIZE + Metadata::size() + Index::size();
+        info!("5");
+
+        let page_offset = base_data_offset + (local_page_index * PAGE_SIZE);
+
+        info!(
+            "Reading page_no: {} (local index: {}) from offset: {}",
+            page_no, local_page_index, page_offset
+        );
+        // drop(index_map);
         self.read(page_offset, PAGE_SIZE as usize).await
     }
 
@@ -464,6 +535,7 @@ impl StorageState {
         let page = self.read_page(page_no).await?;
         let content_bytes = &page[INODE_METADATA_SIZE as usize..];
         let dir_page = bincode::deserialize(content_bytes)?;
+
         Ok(dir_page)
     }
 
@@ -608,6 +680,7 @@ impl StorageState {
                 op: AtlasOperation::PPeek as i32,
                 chunk_seq: 0,
                 total_chunks: 1,
+                length: 0,
             }),
             data,
         };
@@ -692,40 +765,127 @@ impl StorageState {
         let payload: CachePayload = deserialize(&packet.data).unwrap();
 
         let pages = payload.pages;
+        let catalog = self.clone().read_catalog().await?;
 
-        let mut res: HashMap<u64, PageDataType> = HashMap::new();
+        let mut res: HashMap<u64, Vec<PageDataType>> = HashMap::new();
 
+        info!("pagewseeefwesdf : {:?}", pages);
         for page in pages {
-            let inode = self.get_inode(page).await?;
+            info!("pagefrdsgfhsdvbgbnfvgdshgvfhvgsdjfghsagh :{:?}", page);
 
-            res.insert(page, PageDataType::Inode(inode.clone()));
+            info!("getting inode");
+            let inode = self.get_inode(page).await?;
+            info!("inode : {:?}", inode);
+
+            // res.insert(page, PageDataType::Inode(inode.clone()));
+            res.entry(page)
+                .or_default()
+                .push(PageDataType::Inode(inode.clone()));
+
+            info!("resssssssss in mid : {:?}", res);
 
             if inode.is_directory {
+                info!("fetching directory at {:?}", page);
                 let page_data = self.get_directory_page(page).await?;
 
-                res.insert(page, PageDataType::Directory(page_data));
+                // res.insert(page, PageDataType::Directory(page_data));
+                res.entry(page)
+                    .or_default()
+                    .push(PageDataType::Directory(page_data));
                 continue;
             }
 
+            info!("inode : {:?}", inode);
+
             if inode.is_system_file {
+                info!("fetching inode ");
                 let data = self.read_page(page).await?;
                 let content_bytes = &data[INODE_METADATA_SIZE as usize..];
 
-                if let Ok(xentries) = deserialize::<XentriesPage>(content_bytes) {
-                    res.insert(page, PageDataType::Xentries(xentries));
-                } else if let Ok(pod_mapping) = deserialize::<PodMappingsPage>(content_bytes) {
-                    res.insert(page, PageDataType::PodMappings(pod_mapping));
+                // if let Ok(xentries) = deserialize::<XentriesPage>(content_bytes) {
+                //     info!("xetnriees : {:?}", xentries);
+                //     res.insert(page, PageDataType::Xentries(xentries));
+                // } else if let Ok(pod_mapping) = deserialize::<PodMappingsPage>(content_bytes) {
+                //     info!("pod mapung : {:?}", pod_mapping);
+
+                //     res.insert(page, PageDataType::PodMappings(pod_mapping));
+                // } else {
+                //     log::error!("Unknown system File Data");
+                // }
+
+                let page_data = if catalog
+                    .filesystems
+                    .iter()
+                    .any(|fs| fs.xentries_start_page == page)
+                {
+                    let xentries = deserialize::<XentriesPage>(content_bytes).map_err(|e| {
+                        anyhow!(
+                            "Failed to deserialize XentriesPage for page {}: {}",
+                            page,
+                            e
+                        )
+                    })?;
+                    info!("Deserialized XentriesPage: {:?}", xentries);
+                    PageDataType::Xentries(xentries)
+                } else if catalog
+                    .filesystems
+                    .iter()
+                    .any(|fs| fs.pod_mappings_start_page == page)
+                {
+                    let pod_mapping =
+                        deserialize::<PodMappingsPage>(content_bytes).map_err(|e| {
+                            anyhow!(
+                                "Failed to deserialize PodMappingsPage for page {}: {}",
+                                page,
+                                e
+                            )
+                        })?;
+                    info!("Deserialized PodMappingsPage: {:?}", pod_mapping);
+                    PageDataType::PodMappings(pod_mapping)
                 } else {
-                    log::error!("Unknown system File Data");
-                }
+                    return Err(anyhow!("Page {} is a system file but not found in catalog as XentriesPage or PodMappingsPage", page));
+                };
+                // res.insert(page, page_data);
+                res.entry(page).or_default().push(page_data);
+
+                // let tag = content_bytes[0];
+
+                // info!("tag : {:?}",tag);
+                // info!("tagged ");
+                // let content = &content_bytes[1..];
+
+                // info!("xen : {:?}",deserialize::<XentriesPage>(content_bytes).unwrap());
+                // info!("mapping : {:?}",deserialize::<PodMappingsPage>(content_bytes).unwrap());
+
+                // match tag {
+                //     0 => {
+                //         let xentries = deserialize::<XentriesPage>(content).unwrap();
+                //         info!("inserting entries {:?}", xentries);
+                //         res.insert(page, PageDataType::Xentries(xentries));
+                //     }
+                //     1 => {
+                //         let pod_mapping = deserialize::<PodMappingsPage>(content).unwrap();
+
+                //         info!("inserting mapping {:?}", pod_mapping);
+
+                //         res.insert(page, PageDataType::PodMappings(pod_mapping));
+                //     }
+                //     _ => {
+                //         info!("unknown tag")
+                //     }
+                // }
             }
         }
+
+        info!("final resssssssssssssssssssssssss : {:?}", res);
 
         let payload = PeekResponse { response: res };
 
         let payload_bytes = serialize(&payload)?;
 
         let packet = Packet::new(0, 0, 0, AtlasOperation::Cache as i32, payload_bytes);
+
+        // info!("sending pack : {:?}", packet);
 
         send_packets(sender, packet, stats).await?;
 
@@ -737,7 +897,9 @@ impl StorageState {
             .fs_record
             .ok_or_else(|| anyhow!("BigBangData is missing the required FileSystemRecord"))?;
 
+        info!("fs record : {:?}", fs_record);
         let mut inodes = data.inode;
+        info!("inodes : {:?}", inodes);
 
         if inodes.len() != 3 {
             info!("In Sync Mode");
@@ -803,6 +965,8 @@ impl StorageState {
         let xentries_local_index = global_meta.current_index + 1;
         let pod_mappings_local_index = global_meta.current_index + 2;
 
+        info!("writing index");
+
         global_index.index.insert(root_page, root_local_index);
         global_index
             .index
@@ -811,15 +975,21 @@ impl StorageState {
             .index
             .insert(fs_record.pod_mappings_start_page, pod_mappings_local_index);
 
+        info!("writing directory and inode ");
+
         // Writing All three inodes and content
         self.write_object(root_inode, &serialize(&root_dir_entry)?, root_local_index)
             .await?;
+        info!("writing xentries ");
+
         self.write_object(
             xentries_inode,
             &serialize(&xentries_content)?,
             xentries_local_index,
         )
         .await?;
+        info!("writing mapping ");
+
         self.write_object(
             pod_mappings_inode,
             &serialize(&pod_mapping_content)?,
@@ -829,11 +999,37 @@ impl StorageState {
 
         global_meta.current_index += 3; // 3 Pages stored
         global_meta.last_updated = Utc::now().timestamp() as u64;
+
+        info!("writing global meta and index");
+
         self.write(PAGE_SIZE, &global_meta.to_bytes()?).await?;
+        info!("0");
+
         self.write(PAGE_SIZE + Metadata::size(), &global_index.to_bytes()?)
             .await?;
+        drop(global_meta);
+        drop(global_index);
+        info!("1");
 
+        let xent = self
+            .get_xentries_page(fs_record.xentries_start_page)
+            .await?;
+        info!("3");
+
+        let map = self
+            .get_pod_mappings_page(fs_record.pod_mappings_start_page)
+            .await?;
+        info!("8");
+
+        info!("xent : {:?}", xent);
+        info!("map : {:?}", map);
+
+        info!("adding catalog");
         self.add_catalog_entry(fs_record).await?;
+
+        let cat = self.clone().read_catalog().await?;
+
+        info!("catalog : {:?}", cat);
 
         // info!(
         //     "bigBang for fs_id {} completed successfully.",
@@ -849,15 +1045,23 @@ impl StorageState {
             .ok_or_else(|| anyhow!("ArmageddonData is missing the required FileSystemRecord"))?;
 
         let pages_to_delete = data.page_ids;
+        let cat = self.clone().read_catalog().await?;
+
+        info!("catalog : {:?}", cat);
 
         if pages_to_delete.is_empty() {
-            self.remove_catalog_entry(fs_record).await?;
+            self.remove_catalog_entry(fs_record.clone()).await?;
+
+            let cat = self.clone().read_catalog().await?;
+
+            info!("catalog : {:?}", cat);
         }
 
         // let mut global_meta = self.metadata.lock().await;
         let mut global_index = self.index.lock().await;
 
         for page in pages_to_delete {
+            // TO DO : Use global index instead of local index for consistency
             let local_index = global_index
                 .index
                 .remove(&page)
@@ -866,11 +1070,23 @@ impl StorageState {
             self.clear_page(local_index).await?;
         }
 
+        let xent = self
+            .get_xentries_page(fs_record.clone().xentries_start_page)
+            .await?;
+        let map = self
+            .get_pod_mappings_page(fs_record.clone().pod_mappings_start_page)
+            .await?;
+
+        info!("xent : {:?}", xent);
+        info!("map : {:?}", map);
+
         Ok(())
     }
 
     pub async fn handle_mkdir(self, data: MkDirPayload) -> Result<()> {
         // Check if the new directory is to be stored here or not
+
+        info!("mkdir payload : {:?}", data);
         match (data.new_inode, data.directory_entery) {
             (None, None) => {
                 info!("No inode or directory entry present")
@@ -878,12 +1094,14 @@ impl StorageState {
             (None, _) => return Err(anyhow::anyhow!("Missing new_inode")),
             (_, None) => return Err(anyhow::anyhow!("Missing directory_entery")),
             (Some(inode), Some(entry)) => {
-                let dir_entry_page = DirectoryEntryPage {
-                    entries: vec![entry],
-                };
+                info!("creating dir");
 
                 let mut global_meta = self.metadata.lock().await;
                 let mut global_index = self.index.lock().await;
+
+                let dir_entry_page = DirectoryEntryPage {
+                    entries: vec![entry],
+                };
 
                 let local_index = global_meta.current_index;
 
@@ -896,6 +1114,13 @@ impl StorageState {
                 self.write(PAGE_SIZE, &global_meta.to_bytes()?).await?;
                 self.write(PAGE_SIZE + Metadata::size(), &global_index.to_bytes()?)
                     .await?;
+
+                drop(global_meta);
+                drop(global_index);
+
+                let dir_entry_page = self.get_directory_page(inode.pages[0]).await?;
+
+                info!("new directory page : {:?}", dir_entry_page);
             }
         }
 
@@ -908,15 +1133,22 @@ impl StorageState {
             (None, _) => return Err(anyhow::anyhow!("Missing updated parent_inode")),
             (_, None) => return Err(anyhow::anyhow!("Missing parent directory_entry")),
             (Some(inode), Some(entry)) => {
+                info!("update parent");
+
+                info!("entry : {:?}", entry);
+
+                info!("hjsakdh iundoeowd : {:?}",inode);
+
                 let global_index = self.index.lock().await;
 
-                let local_page = global_index.index.get(&inode.pages[0]).unwrap();
+                let local_page = global_index.index.get(&inode.pages[0]).unwrap().clone();
+                drop(global_index);
 
-                let mut dir_entry_page = self.get_directory_page(*local_page).await?;
+                let mut dir_entry_page = self.get_directory_page(inode.pages[0]).await?;
 
                 dir_entry_page.entries.push(entry);
 
-                self.write_object(&inode, &serialize(&dir_entry_page)?, *local_page)
+                self.write_object(&inode, &serialize(&dir_entry_page)?, local_page)
                     .await?;
             }
         }
@@ -929,27 +1161,49 @@ impl StorageState {
             data.pods_mapping,
         ) {
             (Some(inode1), Some(entry1), Some(inode2), Some(entry2)) => {
+                info!("update xentry and mapping");
+
                 let global_index = self.index.lock().await;
 
                 // Update first entry
                 let xentries_local_page = global_index
                     .index
                     .get(&inode1.pages[0])
-                    .ok_or_else(|| anyhow::anyhow!("Invalid page reference in xentires_inode"))?;
-                let mut dir_entry_page1 = self.get_xentries_page(*xentries_local_page).await?;
+                    .ok_or_else(|| anyhow::anyhow!("Invalid page reference in xentires_inode"))?
+                    .clone();
+
+                let local_page2 = global_index
+                    .index
+                    .get(&inode2.pages[0])
+                    .ok_or_else(|| anyhow::anyhow!("Invalid page reference in pod_mapping_inode"))?
+                    .clone();
+                drop(global_index);
+
+                info!("INODE1 : {:?}", inode1);
+                info!("INODE2 : {:?}", inode2);
+
+                let mut dir_entry_page1 = self.get_xentries_page(inode1.pages[0]).await?;
+                info!("old xentry : {:?}", dir_entry_page1);
                 dir_entry_page1.mappings.push(entry1);
 
-                self.write_object(&inode1, &serialize(&dir_entry_page1)?, *xentries_local_page)
+                self.write_object(&inode1, &serialize(&dir_entry_page1)?, xentries_local_page)
                     .await?;
 
+                let mut p = self.get_xentries_page(inode1.pages[0]).await?;
+                info!("new entry : {:?}", p);
+
                 // Update second entry
-                let local_page2 = global_index.index.get(&inode2.pages[0]).ok_or_else(|| {
-                    anyhow::anyhow!("Invalid page reference in pod_mapping_inode")
-                })?;
-                let mut dir_entry_page2 = self.get_pod_mappings_page(*local_page2).await?;
+                // let local_page2 = global_index.index.get(&inode2.pages[0]).ok_or_else(|| {
+                //     anyhow::anyhow!("Invalid page reference in pod_mapping_inode")
+                // })?;
+                let mut dir_entry_page2 = self.get_pod_mappings_page(inode2.pages[0]).await?;
+                info!("old mapping :{:?}", dir_entry_page2);
                 dir_entry_page2.mappings.push(entry2);
-                self.write_object(&inode2, &serialize(&dir_entry_page2)?, *local_page2)
+                self.write_object(&inode2, &serialize(&dir_entry_page2)?, local_page2)
                     .await?;
+
+                let p2 = self.get_pod_mappings_page(inode2.pages[0]).await?;
+                info!("old mapping : {:?}", p2);
             }
             (None, None, None, None) => {
                 info!("No parent inode or directory entry data present");
@@ -960,7 +1214,6 @@ impl StorageState {
                 ));
             }
         }
-
         Ok(())
     }
 
@@ -969,7 +1222,9 @@ impl StorageState {
 
         let mut global_meta = self.metadata.lock().await;
         let mut global_index = self.index.lock().await;
+        info!("index : {:?}", global_index.index);
 
+        info!("pages : {:?}", pages);
         for page in pages {
             let local_index = global_index
                 .index
@@ -978,6 +1233,7 @@ impl StorageState {
 
             self.clear_page(local_index).await?;
         }
+        drop(global_index);
 
         info!("Cleared pages !");
 
@@ -988,22 +1244,43 @@ impl StorageState {
             (None, _) => return Err(anyhow::anyhow!("Missing new_inode")),
             (_, None) => return Err(anyhow::anyhow!("Missing directory_entery")),
             (Some(inode), Some(dir_entry)) => {
+                let global_index = self.index.lock().await;
+
+                info!("direntry : {:?}", dir_entry);
+                info!("removing directory entry");
+                info!("direntry : {:?}", dir_entry);
+
+                let local_index = global_index
+                    .index
+                    .get(&inode.pages[0])
+                    .ok_or_else(|| anyhow::anyhow!("Invalid page reference in pod_mapping_inode"))?
+                    .clone();
+
+                drop(global_index);
+
                 let mut dir_entry_page = self.get_directory_page(inode.pages[0]).await?;
+
+                info!("directory page : {:?}", dir_entry_page);
 
                 dir_entry_page
                     .entries
                     .retain(|entry| entry.inode_no != dir_entry.inode_no);
 
-                let local_index = global_meta.current_index;
+                info!("after retain: {:?}", dir_entry_page.entries);
 
                 self.write_object(&inode, &serialize(&dir_entry_page)?, local_index)
                     .await?;
+
+                let n = self.get_directory_page(inode.pages[0]).await?;
+                info!("new Directory page : {:?}", n);
             }
         }
 
         // Update root of File system, Check if it exists here
         match (data.xentires_inode, data.pod_mapping_inode) {
             (Some(inode1), Some(inode2)) => {
+                info!("removing xentry and mapping");
+
                 let global_index = self.index.lock().await;
 
                 let xentires = data.xentry_mapping;
@@ -1013,8 +1290,19 @@ impl StorageState {
                 let xentries_local_page = global_index
                     .index
                     .get(&inode1.pages[0])
-                    .ok_or_else(|| anyhow::anyhow!("Invalid page reference in xentires_inode"))?;
-                let mut dir_entry_page1 = self.get_xentries_page(*xentries_local_page).await?;
+                    .ok_or_else(|| anyhow::anyhow!("Invalid page reference in xentires_inode"))?
+                    .clone();
+
+                let local_page2 = global_index
+                    .index
+                    .get(&inode2.pages[0])
+                    .ok_or_else(|| anyhow::anyhow!("Invalid page reference in pod_mapping_inode"))?
+                    .clone();
+
+                drop(global_index);
+
+                let mut dir_entry_page1 = self.get_xentries_page(xentries_local_page).await?;
+                info!("old xentry : {:?}", dir_entry_page1);
 
                 for mapping in xentires {
                     dir_entry_page1
@@ -1022,14 +1310,18 @@ impl StorageState {
                         .retain(|entry| entry.inode_no != mapping.inode_no);
                 }
 
-                self.write_object(&inode1, &serialize(&dir_entry_page1)?, *xentries_local_page)
+                self.write_object(&inode1, &serialize(&dir_entry_page1)?, xentries_local_page)
                     .await?;
 
+                let mut p = self.get_xentries_page(xentries_local_page).await?;
+                info!("new xentry : {:?}", p);
+
                 // Update second entry
-                let local_page2 = global_index.index.get(&inode2.pages[0]).ok_or_else(|| {
-                    anyhow::anyhow!("Invalid page reference in pod_mapping_inode")
-                })?;
-                let mut dir_entry_page2 = self.get_pod_mappings_page(*local_page2).await?;
+                // let local_page2 = global_index.index.get(&inode2.pages[0]).ok_or_else(|| {
+                //     anyhow::anyhow!("Invalid page reference in pod_mapping_inode")
+                // })?;
+                let mut dir_entry_page2 = self.get_pod_mappings_page(local_page2).await?;
+                info!("old mapping : {:?}", dir_entry_page2);
 
                 for mapping in mappings {
                     dir_entry_page2
@@ -1037,8 +1329,11 @@ impl StorageState {
                         .retain(|entry| entry.logical_page != mapping.logical_page);
                 }
 
-                self.write_object(&inode2, &serialize(&dir_entry_page2)?, *local_page2)
+                self.write_object(&inode2, &serialize(&dir_entry_page2)?, local_page2)
                     .await?;
+
+                let p2 = self.get_pod_mappings_page(local_page2).await?;
+                info!("old mapping : {:?}", p2);
             }
             (None, None) => {
                 info!("No parent inode or directory entry data present");
@@ -1054,11 +1349,14 @@ impl StorageState {
     }
 
     pub async fn handle_create_file(self, data: CreateFilePayload) -> Result<()> {
+        info!("create file");
         let mut global_meta = self.metadata.lock().await;
         let mut global_index = self.index.lock().await;
 
         match data.new_inode {
             Some(inode) => {
+                info!("inode : {:?}", inode);
+
                 let local_index = global_meta.current_index;
 
                 global_index.index.insert(inode.pages[0], local_index);
@@ -1074,6 +1372,8 @@ impl StorageState {
                 info!("Inode not Present, Checking parent");
             }
         }
+        drop(global_meta);
+        drop(global_index);
 
         match (data.parent_inode, data.directory_entery_parent) {
             (None, None) => {
@@ -1082,16 +1382,22 @@ impl StorageState {
             (None, _) => return Err(anyhow::anyhow!("Missing updated parent_inode")),
             (_, None) => return Err(anyhow::anyhow!("Missing parent directory_entry")),
             (Some(inode), Some(entry)) => {
+                info!("inodeddededede  {:?}", inode);
                 let global_index = self.index.lock().await;
 
-                let local_page = global_index.index.get(&inode.pages[0]).unwrap();
+                let local_page = global_index.index.get(&inode.pages[0]).unwrap().clone();
+                drop(global_index);
 
-                let mut dir_entry_page = self.get_directory_page(*local_page).await?;
+                let mut dir_entry_page = self.get_directory_page(inode.pages[0]).await?;
+                info!("old directory page : {:?}", dir_entry_page);
 
                 dir_entry_page.entries.push(entry);
 
-                self.write_object(&inode, &serialize(&dir_entry_page)?, *local_page)
+                self.write_object(&inode, &serialize(&dir_entry_page)?, local_page)
                     .await?;
+
+                let mut n = self.get_directory_page(inode.pages[0]).await?;
+                info!("old directory page : {:?}", n);
             }
         }
 
@@ -1109,21 +1415,38 @@ impl StorageState {
                 let xentries_local_page = global_index
                     .index
                     .get(&inode1.pages[0])
-                    .ok_or_else(|| anyhow::anyhow!("Invalid page reference in xentires_inode"))?;
-                let mut dir_entry_page1 = self.get_xentries_page(*xentries_local_page).await?;
+                    .ok_or_else(|| anyhow::anyhow!("Invalid page reference in xentires_inode"))?
+                    .clone();
+
+                let local_page2 = global_index
+                    .index
+                    .get(&inode2.pages[0])
+                    .ok_or_else(|| anyhow::anyhow!("Invalid page reference in pod_mapping_inode"))?
+                    .clone();
+
+                drop(global_index);
+
+                let mut dir_entry_page1 = self.get_xentries_page(inode1.pages[0]).await?;
+                info!("old xentry : {:?}", dir_entry_page1);
                 dir_entry_page1.mappings.push(entry1);
 
-                self.write_object(&inode1, &serialize(&dir_entry_page1)?, *xentries_local_page)
+                self.write_object(&inode1, &serialize(&dir_entry_page1)?, xentries_local_page)
                     .await?;
 
+                let mut p = self.get_xentries_page(inode1.pages[0]).await?;
+                info!("new xentry : {:?}", p);
+
                 // Update second entry
-                let local_page2 = global_index.index.get(&inode2.pages[0]).ok_or_else(|| {
-                    anyhow::anyhow!("Invalid page reference in pod_mapping_inode")
-                })?;
-                let mut dir_entry_page2 = self.get_pod_mappings_page(*local_page2).await?;
+
+                let mut dir_entry_page2 = self.get_pod_mappings_page(inode2.pages[0]).await?;
+                info!("old mapping : {:?}", dir_entry_page2);
+
                 dir_entry_page2.mappings.push(entry2);
-                self.write_object(&inode2, &serialize(&dir_entry_page2)?, *local_page2)
+                self.write_object(&inode2, &serialize(&dir_entry_page2)?, local_page2)
                     .await?;
+
+                let mut q = self.get_pod_mappings_page(inode2.pages[0]).await?;
+                info!("new mapping : {:?}", q);
             }
             (None, None, None, None) => {
                 info!("No parent inode or directory entry data present");
@@ -1310,7 +1633,13 @@ impl StorageState {
 
         let bytes = serialize(&catalogue).unwrap();
 
-        let pkt = Packet::new(0, 0, 0, AtlasOperation::Quorum as i32, bytes);
+        let pkt = Packet::new(
+            0,
+            0,
+            bytes.len() as u64,
+            AtlasOperation::Quorum as i32,
+            bytes,
+        );
 
         send_packets(sender, pkt, stats).await?;
 
@@ -1339,17 +1668,22 @@ impl StorageState {
             ))
             .await?;
         file_handle.write_all(content_bytes).await?;
+        drop(file_handle);
         Ok(())
     }
 
     async fn read_catalog(self) -> Result<GlobalCatalogPage> {
         let mut file_handle = self.file.lock().await;
+
         file_handle.seek(SeekFrom::Start(0)).await?;
 
         let mut buffer = vec![0u8; PAGE_SIZE as usize];
         file_handle.read_exact(&mut buffer).await?;
 
+        drop(file_handle);
+
         let end = buffer.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+        info!("end : {:?}", end);
 
         if end == 0 {
             return Ok(GlobalCatalogPage {
@@ -1359,9 +1693,10 @@ impl StorageState {
         }
 
         // deserialize(&buffer[..end]).context("Failed to deserialize Page 0")
-        match deserialize(&buffer[..end]) {
+        match deserialize(&buffer) {
             Ok(res) => Ok(res),
             Err(e) => {
+                log::error!("error reading catalog : {:?}", e);
                 return Ok(GlobalCatalogPage {
                     filesystems: vec![],
                     next_catalog_page: 0,
@@ -1404,6 +1739,7 @@ impl StorageState {
         let mut file_handle = self.file.lock().await;
         file_handle.seek(SeekFrom::Start(0)).await?;
         file_handle.write_all(&bytes).await?;
+        drop(file_handle);
         Ok(())
     }
 
@@ -1422,13 +1758,12 @@ impl Inode {
     pub fn new(inode_no: u64, ownership: String, is_directory: bool, is_system_file: bool) -> Self {
         Self {
             inode_no,
-            ownership,
             created_timestamp: Utc::now().timestamp() as u64,
             modified_timestamp: Utc::now().timestamp() as u64,
             size: 0,
             is_directory,
             is_system_file,
-            pages: Vec::new(),
+            pages: vec![25],
         }
     }
 

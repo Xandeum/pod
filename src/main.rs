@@ -3,6 +3,7 @@ use log::info;
 use pod::{
     client::{configure_client, start_stream_loop},
     logger::init_logger,
+    protos::{DirectoryEntry, Inode, MkDirPayload},
     server::start_server,
     stats::Stats,
     storage::StorageState,
@@ -15,7 +16,8 @@ use tokio::{
 };
 
 // const ATLAS_IP: &str = "65.108.233.175:5000";
-const ATLAS_IP: &str = "127.0.0.1:5000";
+// const ATLAS_IP: &str = "65.108.233.175:6000";
+const ATLAS_IP: &str = "127.0.0.1:6000";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -30,7 +32,7 @@ async fn main() -> Result<()> {
 
     let client_config = configure_client()?;
 
-    let mut endpoint = Endpoint::client(SocketAddr::from(([0, 0, 0, 0], 18268)))?;
+    let mut endpoint = Endpoint::client(SocketAddr::from(([0, 0, 0, 0], 1825)))?;
 
     endpoint.set_default_client_config(client_config);
     let addr = SocketAddr::from_str(ATLAS_IP)?;
@@ -40,9 +42,9 @@ async fn main() -> Result<()> {
     let mut client_shutdown_rx = shutdown_tx.subscribe();
 
     let storage_state = StorageState::get_or_create_state().await?;
-    let _ = storage_state
-        .bootstrap_dummy_filesystem(0, "127.0.0.1:18268")
-        .await?;
+    // let _ = storage_state
+    //     .bootstrap_dummy_filesystem(0, "127.0.0.1:18268")
+    //     .await?;
     let metadata = storage_state.metadata.clone();
 
     let stats = Arc::new(Mutex::new(Stats {
@@ -53,6 +55,7 @@ async fn main() -> Result<()> {
         packets_received: 0,
         packets_sent: 0,
     }));
+    let st = storage_state.clone();
 
     let stats_clone = stats.clone();
     let client_handle = tokio::spawn(async move {
@@ -65,6 +68,24 @@ async fn main() -> Result<()> {
         )
         .await;
     });
+
+    // let payload = MkDirPayload {
+    //     new_inode: Some(Inode::new(1, "system".to_string(), true, false)),
+    //     directory_entery: Some(DirectoryEntry {
+    //         name: "test_dir".to_string(),
+    //         inode_no: 1,
+    //     }),
+    //     parent_inode: Some(Inode::new(1, "system".to_string(), true, false)),
+    //     directory_entery_parent: Some(DirectoryEntry {
+    //         name: "test_dir".to_string(),
+    //         inode_no: 1,
+    //     }),
+    //     xentires_inode: None,
+    //     xentry_mapping: None,
+    //     pod_mapping_inode: None,
+    //     pods_mapping: None,
+    // };
+    // st.handle_mkdir(payload).await.unwrap();
 
     let server_handle = tokio::spawn(async move {
         let _ = start_server(metadata, stats.clone()).await;

@@ -16,7 +16,7 @@ use tokio::time::sleep;
 use crate::cert::AcceptAllVerifier;
 use crate::packet::{reassemble_packets, split_packet, AtlasOperation, Packet, MAX_PACKET_SIZE};
 use crate::protos::{
-    ArmageddonData, BigBangData, MkDirPayload, PeekPayload, PokePayload, RenamePayload, RmDirPayload
+    ArmageddonData, BigBangData, CreateFilePayload, MkDirPayload, PeekPayload, PokePayload, RenamePayload, RmDirPayload
 };
 use crate::stats::Stats;
 use crate::storage::StorageState;
@@ -103,25 +103,45 @@ async fn handle_stream(
         Ok(operation) => {
             match operation {
                 AtlasOperation::Handshake => {
+                    info!("Handshake");
                     let pkt = Packet::new_handshake();
                     let _ = send_packets(sender.clone(), pkt, stats.clone()).await?;
                 }
                 AtlasOperation::PBigbang => {
+                    info!("Big bang");
+
+                    let len = packet.meta.unwrap().length;
+
                     let big_bang_data: BigBangData = deserialize(&packet.data)?;
+
+                    // let big_bang_data: BigBangData = deserialize(&packet.data[0..len as usize])?;
                     let _ = storage_state.handle_bigbang(big_bang_data).await?;
                 }
                 AtlasOperation::PArmageddon => {
+                    info!("Armageddon");
+
                     let armageddon_data: ArmageddonData = deserialize(&packet.data)?;
                     let _ = storage_state.handle_armageddon(armageddon_data).await?;
                 }
 
                 AtlasOperation::PMkdir => {
+                    info!("Bigbang");
+
                     let mkdir_data: MkDirPayload = deserialize(&packet.data)?;
                     let _ = storage_state.handle_mkdir(mkdir_data).await?;
                 }
                 AtlasOperation::PRmdir => {
+                    info!("Bigbang");
+
                     let rmdir_data: RmDirPayload = deserialize(&packet.data)?;
                     let _ = storage_state.handle_rmdir(rmdir_data).await?;
+                }
+
+                 AtlasOperation::POpenrw => {
+                    info!("opernrw");
+
+                    let rmdir_data: CreateFilePayload = deserialize(&packet.data)?;
+                    let _ = storage_state.handle_create_file(rmdir_data).await?;
                 }
 
                 AtlasOperation::PPeek => {
@@ -143,6 +163,7 @@ async fn handle_stream(
                     let _ = storage_state.handle_rename(rename_data).await?;
                 }
                 AtlasOperation::Cache => {
+                    info!("cache");
                     let _ = storage_state
                         .handle_cache(packet, sender.clone(), stats.clone())
                         .await;
@@ -235,7 +256,7 @@ pub async fn send_packets(
         }
     }
 
-    sleep(Duration::from_secs(5)).await;
+    // sleep(Duration::from_secs(5)).await;
     sender.finish()?;
 
     let mut stat = stats.lock().await;

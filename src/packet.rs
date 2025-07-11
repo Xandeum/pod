@@ -4,7 +4,7 @@ use log::{error, info};
 pub use crate::protos::{AtlasOperation, Meta, Packet};
 // use serde::{Deserialize, Serialize};
 
-pub const PACKET_META_SIZE: usize = 36;
+pub const PACKET_META_SIZE: usize = 29;
 pub const MAX_DATA_IN_PACKET: usize = 1232;
 pub const MAX_PACKET_SIZE: usize = PACKET_META_SIZE + MAX_DATA_IN_PACKET;
 
@@ -34,12 +34,13 @@ pub const MAX_PACKET_SIZE: usize = PACKET_META_SIZE + MAX_DATA_IN_PACKET;
 // // }
 
 impl Packet {
-    pub fn new(page_no: u64, offset: u32, length: u32, op: i32, data: Vec<u8>) -> Self {
+    pub fn new(page_no: u64, offset: u32, length: u64, op: i32, data: Vec<u8>) -> Self {
         Packet {
             meta: Some(Meta {
                 op,
                 chunk_seq: 0,
                 total_chunks: 1,
+                length: length,
             }),
             data,
         }
@@ -57,6 +58,7 @@ impl Packet {
                 op: AtlasOperation::PPoke as i32,
                 chunk_seq,
                 total_chunks,
+                length: 0,
             }),
             data,
         }
@@ -81,24 +83,27 @@ impl Packet {
                 op: AtlasOperation::Handshake as i32,
                 chunk_seq: 0,
                 total_chunks: 1,
+                length: 0,
             }),
             data: [0u8; MAX_DATA_IN_PACKET].to_vec(),
         }
     }
 }
 
-// TO DO : Fix This, Currently made changes to work with Packet protos
 pub fn split_packet(packet: Packet) -> Vec<Packet> {
     if packet.meta.unwrap().op != AtlasOperation::PPoke as i32
         || packet.data.len() <= MAX_DATA_IN_PACKET
     {
+        let mut data = packet.clone().data;
+        data.resize(MAX_DATA_IN_PACKET, 0);
         return vec![Packet {
             meta: Some(Meta {
                 chunk_seq: 0,
                 total_chunks: 1,
                 op: packet.meta.unwrap().op,
+                length: packet.data.len() as u64,
             }),
-            ..packet
+            data: data,
         }];
     }
 
@@ -129,6 +134,7 @@ pub async fn reassemble_packets(mut packets: Vec<Packet>) -> Option<Packet> {
 
     let expected_total_chunks = first.meta.unwrap().total_chunks;
     let expected_op = first.meta.unwrap().op;
+    let length = first.meta.unwrap().length;
 
     packets.sort_by_key(|p| p.meta.unwrap().chunk_seq);
 
@@ -142,5 +148,5 @@ pub async fn reassemble_packets(mut packets: Vec<Packet>) -> Option<Packet> {
         res.extend_from_slice(&packet.data);
     }
     res.truncate(PAGE_SIZE as usize);
-    Some(Packet::new(0, 00, 0, expected_op, res))
+    Some(Packet::new(0, 00, length, expected_op, res))
 }
