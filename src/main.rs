@@ -113,7 +113,7 @@ async fn main() -> Result<()> {
         gossip_client_endpoint.clone(),
     )
     .await?;
-    let _ = start_gossip(entrypoint, peer_list, stats.clone()).await?;
+    let _ = start_gossip(peer_list, stats.clone(),gossip_client_endpoint).await?;
 
     let stats_clone = stats.clone();
     let client_handle = tokio::spawn(async move {

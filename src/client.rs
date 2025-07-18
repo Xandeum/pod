@@ -202,7 +202,7 @@ async fn handle_stream(
     Ok(())
 }
 
-async fn receive_packets(
+pub async fn receive_packets(
     receiver: Arc<Mutex<RecvStream>>,
     stats: Arc<Mutex<Stats>>,
 ) -> Result<Packet> {
@@ -473,7 +473,7 @@ pub fn configure_server() -> Result<ServerConfig> {
     //     .install_default()
     //     .map_err(|e| anyhow::anyhow!("Failed to install CryptoProvider: {:?}", e))?;
 
-    let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
+    let cert = rcgen::generate_simple_self_signed(vec!["atlas".to_string()])?;
     let cert_der = CertificateDer::from(cert.cert);
     let key_der = PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der());
 
