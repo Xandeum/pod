@@ -5,7 +5,7 @@ use pod::{
         configure_client, configure_gossip_client, configure_server, set_default_client,
         start_stream_loop,
     },
-    gossip::{self, bootstrap_from_entrypoint, start_gossip, PeerList},
+    gossip::{self, bootstrap_from_entrypoint, start_gossip, PeerList, GOSSIP_PORT},
     logger::init_logger,
     protos::{DirectoryEntry, Inode, MkDirPayload},
     server::start_server,
@@ -78,6 +78,10 @@ async fn main() -> Result<()> {
     let client_config = configure_client()?;
 
     let mut endpoint = Endpoint::client(SocketAddr::from(([0, 0, 0, 0], 1825)))?;
+    let mut gossip_client_endpoint =
+        Endpoint::client(SocketAddr::from(([0, 0, 0, 0], GOSSIP_PORT)))?;
+
+    gossip_client_endpoint.set_default_client_config(configure_gossip_client()?);
 
     endpoint.set_default_client_config(client_config);
     let addr = SocketAddr::from_str(ATLAS_IP)?;
@@ -103,7 +107,12 @@ async fn main() -> Result<()> {
 
     let peer_list = Arc::new(RwLock::new(PeerList { list: vec![] }));
 
-    let _ = bootstrap_from_entrypoint(entrypoint, peer_list.clone(), endpoint.clone()).await?;
+    let _ = bootstrap_from_entrypoint(
+        entrypoint,
+        peer_list.clone(),
+        gossip_client_endpoint.clone(),
+    )
+    .await?;
     let _ = start_gossip(entrypoint, peer_list, stats.clone()).await?;
 
     let stats_clone = stats.clone();

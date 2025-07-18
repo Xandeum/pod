@@ -24,7 +24,7 @@ const MAX_CONNECTION_RETRIES: u8 = 3;
 const GOSSIP_INTERVAL_SECS: u64 = 30;
 const MAX_GOSSIP_PEERS: usize = 3;
 const MAX_INACTIVITY_PERIOD_IN_SECS: u64 = 60 * 60;
-const GOSSIP_PORT: u16 = 3000;
+pub const GOSSIP_PORT: u16 = 3000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Peer {
@@ -74,7 +74,7 @@ pub async fn start_gossip(
 
     // let addr = SocketAddr::from_str(&entrypoint)?;
 
-    let mut endpoint = Endpoint::client(SocketAddr::from(([0, 0, 0, 0], GOSSIP_PORT)))?;
+    let mut endpoint = Endpoint::client(SocketAddr::from(([127, 0, 0, 1], GOSSIP_PORT)))?;
 
     endpoint.set_default_client_config(client_config);
 
@@ -90,9 +90,15 @@ pub async fn start_gossip(
     // let _ = bootstrap_from_entrypoint(entrypoint, peer_list.clone(), endpoint.clone()).await?;
     // ------------------------- Start Gossip -----------------------
 
-    let _ = accept_gossip_connections(endpoint.clone(), peer_list.clone()).await?;
+    tokio::spawn(accept_gossip_connections(
+        endpoint.clone(),
+        peer_list.clone(),
+    ));
+    tokio::spawn(start_gossip_loop(endpoint, peer_list, stats));
 
-    let _ = start_gossip_loop(endpoint, peer_list, stats);
+    // let _ = accept_gossip_connections(endpoint.clone(), peer_list.clone()).await?;
+
+    // let _ = start_gossip_loop(endpoint, peer_list, stats);
 
     Ok(())
 }
