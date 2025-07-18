@@ -1,9 +1,13 @@
 use anyhow::{anyhow, Error, Result};
 use bincode::deserialize;
 use log::{error, info, warn};
-use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream, TransportConfig, VarInt};
-use rustls::pki_types::CertificateDer;
+use quinn::{
+    ClientConfig, Connection, Endpoint, RecvStream, SendStream, ServerConfig, TransportConfig,
+    VarInt,
+};
+use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use rustls::RootCertStore;
+use rustls::ServerConfig as RustlsServerConfig;
 use rustls_pemfile::certs;
 use std::fs::File;
 use std::io::BufReader;
@@ -16,7 +20,8 @@ use tokio::time::sleep;
 use crate::cert::AcceptAllVerifier;
 use crate::packet::{reassemble_packets, split_packet, AtlasOperation, Packet, MAX_PACKET_SIZE};
 use crate::protos::{
-    ArmageddonData, BigBangData, CreateFilePayload, MkDirPayload, PeekPayload, PokePayload, RenamePayload, RmDirPayload
+    ArmageddonData, BigBangData, CreateFilePayload, MkDirPayload, PeekPayload, PokePayload,
+    RenamePayload, RmDirPayload,
 };
 use crate::stats::Stats;
 use crate::storage::StorageState;
@@ -125,19 +130,19 @@ async fn handle_stream(
                 }
 
                 AtlasOperation::PMkdir => {
-                    info!("Bigbang");
+                    info!("mkdfdir");
 
                     let mkdir_data: MkDirPayload = deserialize(&packet.data)?;
                     let _ = storage_state.handle_mkdir(mkdir_data).await?;
                 }
                 AtlasOperation::PRmdir => {
-                    info!("Bigbang");
+                    info!("rmdir");
 
                     let rmdir_data: RmDirPayload = deserialize(&packet.data)?;
                     let _ = storage_state.handle_rmdir(rmdir_data).await?;
                 }
 
-                 AtlasOperation::POpenrw => {
+                AtlasOperation::POpenrw => {
                     info!("opernrw");
 
                     let rmdir_data: CreateFilePayload = deserialize(&packet.data)?;
@@ -145,6 +150,8 @@ async fn handle_stream(
                 }
 
                 AtlasOperation::PPeek => {
+                    info!("peek");
+
                     // Handle peek and send response
                     let peek_data: PeekPayload = deserialize(&packet.data)?;
 
@@ -153,11 +160,15 @@ async fn handle_stream(
                         .await;
                 }
                 AtlasOperation::PPoke => {
+                    info!("poke");
+
                     let poke_data: PokePayload = deserialize(&packet.data)?;
 
                     let _ = storage_state.handle_poke(poke_data, stats.clone()).await;
                 }
                 AtlasOperation::PRename => {
+                    info!("rename");
+
                     let rename_data: RenamePayload = deserialize(&packet.data)?;
 
                     let _ = storage_state.handle_rename(rename_data).await?;
@@ -169,6 +180,8 @@ async fn handle_stream(
                         .await;
                 }
                 AtlasOperation::Quorum => {
+                    info!("quorum");
+
                     let _ = storage_state
                         .handle_quorum(sender.clone(), stats.clone())
                         .await;
@@ -204,6 +217,7 @@ async fn receive_packets(
 
         match recv.read_exact(&mut buffer).await {
             Ok(()) => {
+                info!("buffer len : {:?}", buffer.len());
                 let packet: Packet = bincode::deserialize(&buffer)
                     .map_err(|e| anyhow!("Failed to deserialize packet : {:?}", e))?;
 
@@ -265,6 +279,43 @@ pub async fn send_packets(
     Ok(())
 }
 
+pub async fn send_and_receive_packets(
+    connection: Connection,
+    data: Packet,
+    stats: Arc<Mutex<Stats>>,
+) -> Result<Packet, Error> {
+    // info!("connected {:?}",connection.);
+    let client = connection.remote_address();
+    // if connection.closed().now_or_never().is_some() {
+    //     info!("Connection to {:?} is already closed", client);
+    //     return Err(anyhow!("Connection already closed").into());
+    // }
+
+    match connection.open_bi().await {
+        Ok((sender, receiver)) => {
+            info!("Connection established, Sending data to {:?}", client);
+
+            match send_packets(Arc::new(Mutex::new(sender)), data, stats.clone()).await {
+                Ok(()) => info!("Send Packets Finished"),
+                Err(e) => {
+                    info!("****Send Packets Failed : {:?}", e);
+                    return Err(e.into());
+                }
+            }
+            let packet = receive_packets(Arc::new(Mutex::new(receiver)), stats).await?;
+
+            return Ok(packet);
+        }
+        Err(e) => {
+            info!(
+                "***Failed to open Bi directional stream to client {:?} due to : {:?}",
+                client, e
+            );
+            return Err(e.into());
+        }
+    }
+}
+
 pub async fn try_connect(endpoint: Endpoint, addr: SocketAddr) -> Result<Connection> {
     const RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -275,7 +326,7 @@ pub async fn try_connect(endpoint: Endpoint, addr: SocketAddr) -> Result<Connect
                 return Ok(connection);
             }
             Err(e) => {
-                warn!("Connection Attempt failed : {}", e);
+                info!("Connection Attempt failed : {}", e);
             }
         }
 
@@ -283,10 +334,44 @@ pub async fn try_connect(endpoint: Endpoint, addr: SocketAddr) -> Result<Connect
     }
 }
 
+pub async fn try_connect_with_retries(
+    endpoint: Endpoint,
+    addr: SocketAddr,
+    max_retries: u8,
+) -> Result<Connection> {
+    const RETRY_INTERVAL: Duration = Duration::from_secs(5);
+    let mut last_error = None;
+
+    // Total attempts = 1 initial + max_retries
+    for attempt in 0..=max_retries {
+        match endpoint.connect(addr, "atlas")?.await {
+            Ok(connection) => {
+                info!("Successfully connected to {}", addr);
+                return Ok(connection);
+            }
+            Err(e) => {
+                last_error = Some(e);
+                info!(
+                    "Connection attempt {}/{} to {} failed. Retrying in {}s...",
+                    attempt + 1,
+                    max_retries + 1,
+                    addr,
+                    RETRY_INTERVAL.as_secs()
+                );
+
+                if attempt < max_retries {
+                    tokio::time::sleep(RETRY_INTERVAL).await;
+                }
+            }
+        }
+    }
+    return Err(anyhow!("Failed to connect  : {:?}", last_error));
+}
+
 pub fn configure_client() -> Result<ClientConfig> {
-    rustls::crypto::ring::default_provider()
-        .install_default()
-        .map_err(|e| anyhow::anyhow!("Failed to install CryptoProvider: {:?}", e))?;
+    // rustls::crypto::ring::default_provider()
+    //     .install_default()
+    //     .map_err(|e| anyhow::anyhow!("Failed to install CryptoProvider: {:?}", e))?;
 
     let cert_file = File::open("server.crt")?;
     let mut cert_reader = BufReader::new(cert_file);
@@ -321,4 +406,100 @@ pub fn configure_client() -> Result<ClientConfig> {
     //     quinn::crypto::rustls::QuicClientConfig::try_from(client_config)?,
     // )))
     Ok(client_config)
+}
+
+pub fn configure_gossip_client() -> Result<ClientConfig> {
+    // rustls::crypto::ring::default_provider()
+    //     .install_default()
+    //     .map_err(|e| anyhow::anyhow!("Failed to install CryptoProvider: {:?}", e))?;
+
+    let mut client_crypto = rustls::ClientConfig::builder()
+        .with_root_certificates(RootCertStore::empty())
+        .with_no_client_auth();
+
+    client_crypto
+        .dangerous()
+        .set_certificate_verifier(Arc::new(AcceptAllVerifier));
+
+    let mut client_config = ClientConfig::new(Arc::new(
+        quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)?,
+    ));
+
+    let mut transport_config = TransportConfig::default();
+    transport_config
+        .max_idle_timeout(Some(Duration::from_secs(60).try_into().unwrap()))
+        .stream_receive_window(VarInt::from_u64(1_000_000).unwrap())
+        .max_concurrent_bidi_streams(VarInt::from_u64(10).unwrap());
+
+    client_config.transport_config(Arc::new(transport_config));
+
+    Ok(client_config)
+
+    // // Use the default crypto provider
+    // rustls::crypto::ring::default_provider()
+    //     .install_default()
+    //     .map_err(|e| anyhow::anyhow!("Failed to install CryptoProvider: {:?}", e))?;
+
+    // // Create a rustls client config builder that uses our custom verifier.
+    // // We don't provide any root certificates because the verifier accepts everything anyway.
+    // let mut client_crypto = rustls::ClientConfig::builder()
+    //     .with_root_certificates(rustls::RootCertStore::empty()) // No root CAs needed
+    //     .with_no_client_auth();
+
+    // // This is the crucial part: setting the custom verifier.
+    // client_crypto
+    //     .dangerous()
+    //     .set_certificate_verifier(Arc::new(AcceptAllVerifier));
+
+    // // Wrap the rustls config into a Quinn client config.
+    // let mut client_config = ClientConfig::new(Arc::new(
+    //     quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)?,
+    // ));
+
+    // // Apply your desired transport settings.
+    // let mut transport_config = TransportConfig::default();
+    // transport_config
+    //     .max_idle_timeout(Some(Duration::from_secs(60).try_into().unwrap())) // Shorter timeout for gossip
+    //     .stream_receive_window(VarInt::from_u64(1_000_000).unwrap())
+    //     .max_concurrent_bidi_streams(VarInt::from_u64(10).unwrap()); // Fewer streams needed for gossip
+
+    // client_config.transport_config(Arc::new(transport_config));
+
+    // Ok(client_config)
+}
+
+pub fn configure_server() -> Result<ServerConfig> {
+    // rustls::crypto::ring::default_provider()
+    //     .install_default()
+    //     .map_err(|e| anyhow::anyhow!("Failed to install CryptoProvider: {:?}", e))?;
+
+    let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
+    let cert_der = CertificateDer::from(cert.cert);
+    let key_der = PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der());
+
+    let mut server_crypto = RustlsServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert_der], key_der.into())?;
+
+    let mut server_config = ServerConfig::with_crypto(Arc::new(
+        quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto)?,
+    ));
+
+    let mut transport_config = TransportConfig::default();
+    transport_config
+        .max_idle_timeout(Some(Duration::from_secs(60).try_into().unwrap()))
+        .stream_receive_window(VarInt::from_u64(1_000_000).unwrap())
+        .max_concurrent_bidi_streams(VarInt::from_u64(10).unwrap());
+
+    server_config.transport_config(Arc::new(transport_config));
+
+    Ok(server_config)
+}
+
+pub fn set_default_client() -> Result<()> {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .map_err(|e| anyhow::anyhow!("Failed to install CryptoProvider: {:?}", e))?;
+
+    Ok(())
 }

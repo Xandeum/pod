@@ -25,7 +25,7 @@ use crate::protos::{
 use crate::stats::Stats;
 use common::consts::PAGE_SIZE;
 
-pub const FILE_PATH: &str = "xandeum-podd";
+pub const FILE_PATH: &str = "xandeum-pod";
 const INODE_METADATA_SIZE: u64 = 1024;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -189,13 +189,13 @@ impl StorageState {
 
         let end = cat_bytes.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
 
-        info!("end : {:?}", end);
+        // info!("end : {:?}", end);
 
-        info!("cat bytes ; {:?}", &cat_bytes[..end]);
+        // info!("cat bytes ; {:?}", &cat_bytes[..end]);
 
         match deserialize::<GlobalCatalogPage>(&cat_bytes) {
             Ok(cat) => {
-                info!("catalog : {:?}", cat);
+                // info!("catalog : {:?}", cat);
             }
             Err(e) => {
                 info!("failed to deserialize catalog : {:?}", e);
@@ -549,11 +549,14 @@ impl StorageState {
     pub async fn handle_poke(&self, data: PokePayload, stats: Arc<Mutex<Stats>>) -> Result<()> {
         info!("poking");
 
-        let mut global_meta = self.metadata.lock().await;
-        let mut global_index = self.index.lock().await;
+        // let mut global_meta = self.metadata.lock().await;
+        // let mut global_index = self.index.lock().await;
 
         match data.parent_file_inode {
             Some(inode) => {
+                let mut global_meta = self.metadata.lock().await;
+                let mut global_index = self.index.lock().await;
+
                 let local_index = global_meta.current_index;
 
                 global_index.index.insert(inode.pages[0], local_index);
@@ -570,6 +573,9 @@ impl StorageState {
             }
         }
 
+        let mut global_index = self.index.lock().await;
+        let mut global_meta = self.metadata.lock().await;
+
         let local_page_index = match global_index.index.get(&data.page_no) {
             Some(local_index) => *local_index,
             None => {
@@ -585,22 +591,31 @@ impl StorageState {
             .await?;
 
         let base_data_area_offset = PAGE_SIZE + Metadata::size() + Index::size();
-        let physical_offset = base_data_area_offset + (local_page_index * PAGE_SIZE) + data.offset;
+        let physical_offset = base_data_area_offset + (local_page_index * PAGE_SIZE) + data.offset + INODE_METADATA_SIZE;
 
         self.write(physical_offset, &data.data).await?;
+        drop(global_index);
+        drop(global_meta);
 
         match (data.pod_mapping_inode, data.pods_mapping) {
             (Some(inode), Some(entry)) => {
+                info!("updating pods maping");
+
                 let global_index = self.index.lock().await;
 
                 // Update second entry
-                let local_page = global_index.index.get(&inode.pages[0]).ok_or_else(|| {
-                    anyhow::anyhow!("Invalid page reference in pod_mapping_inode")
-                })?;
-                let mut dir_entry_page = self.get_pod_mappings_page(*local_page).await?;
+                let local_page = global_index
+                    .index
+                    .get(&inode.pages[0])
+                    .ok_or_else(|| anyhow::anyhow!("Invalid page reference in pod_mapping_inode"))?
+                    .clone();
+                drop(global_index);
+
+                let mut dir_entry_page = self.get_pod_mappings_page(local_page).await?;
                 dir_entry_page.mappings.push(entry);
-                self.write_object(&inode, &serialize(&dir_entry_page)?, *local_page)
+                self.write_object(&inode, &serialize(&dir_entry_page)?, local_page)
                     .await?;
+                info!("hjsdh");
             }
             (None, None) => {
                 info!("No parent inode or directory entry data present");
@@ -674,6 +689,8 @@ impl StorageState {
             .read_page_data(data.page_no, data.offset, data.length as usize)
             .await?;
 
+        info!("data : {:?}", data);
+
         // // Create response packet
         let response_packet = Packet {
             meta: Some(Meta {
@@ -684,6 +701,8 @@ impl StorageState {
             }),
             data,
         };
+
+        info!("response packet : {:?}", response_packet);
 
         send_packets(sender, response_packet, stats.clone()).await?;
 
@@ -1137,7 +1156,7 @@ impl StorageState {
 
                 info!("entry : {:?}", entry);
 
-                info!("hjsakdh iundoeowd : {:?}",inode);
+                info!("hjsakdh iundoeowd : {:?}", inode);
 
                 let global_index = self.index.lock().await;
 

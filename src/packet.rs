@@ -34,12 +34,12 @@ pub const MAX_PACKET_SIZE: usize = PACKET_META_SIZE + MAX_DATA_IN_PACKET;
 // // }
 
 impl Packet {
-    pub fn new(page_no: u64, offset: u32, length: u64, op: i32, data: Vec<u8>) -> Self {
+    pub fn new(chunk_seq: u32, total_chunks: u32, length: u64, op: i32, data: Vec<u8>) -> Self {
         Packet {
             meta: Some(Meta {
                 op,
-                chunk_seq: 0,
-                total_chunks: 1,
+                chunk_seq: chunk_seq,
+                total_chunks: total_chunks,
                 length: length,
             }),
             data,
@@ -113,12 +113,21 @@ pub fn split_packet(packet: Packet) -> Vec<Packet> {
     let total_chunks = ((packet.data.len() as u64 + MAX_DATA_IN_PACKET as u64 - 1)
         / MAX_DATA_IN_PACKET as u64) as u32;
 
-    for (i, chunk) in packet.data.chunks(MAX_DATA_IN_PACKET).enumerate() {
+    let pkt = packet.clone();
+
+    for (i, chunk) in packet.data.clone().chunks(MAX_DATA_IN_PACKET).enumerate() {
+        let data = pkt.data.clone();
         let mut chunk_vec = chunk.to_vec();
         chunk_vec.resize(MAX_DATA_IN_PACKET, 0);
 
-        let chunk_offset = 0;
-        let chunk_packet = Packet::new_poke(0, chunk_offset, chunk_vec, i as u32, total_chunks);
+        // let chunk_offset = 0;
+        let chunk_packet = Packet::new(
+            i as u32,
+            total_chunks,
+            pkt.data.clone().len() as u64,
+            packet.meta.unwrap().op,
+            data,
+        );
         packets.push(chunk_packet);
     }
     packets
