@@ -591,7 +591,10 @@ impl StorageState {
             .await?;
 
         let base_data_area_offset = PAGE_SIZE + Metadata::size() + Index::size();
-        let physical_offset = base_data_area_offset + (local_page_index * PAGE_SIZE) + data.offset + INODE_METADATA_SIZE;
+        let physical_offset = base_data_area_offset
+            + (local_page_index * PAGE_SIZE)
+            + data.offset
+            + INODE_METADATA_SIZE;
 
         self.write(physical_offset, &data.data).await?;
         drop(global_index);
@@ -679,7 +682,7 @@ impl StorageState {
 
     pub async fn handle_peek(
         &self,
-        sender: Arc<Mutex<SendStream>>,
+        sender: &mut SendStream,
         data: PeekPayload,
         stats: Arc<Mutex<Stats>>,
     ) -> Result<()> {
@@ -778,7 +781,7 @@ impl StorageState {
     pub async fn handle_cache(
         self,
         packet: Packet,
-        sender: Arc<Mutex<SendStream>>,
+        sender: &mut SendStream,
         stats: Arc<Mutex<Stats>>,
     ) -> Result<()> {
         let payload: CachePayload = deserialize(&packet.data).unwrap();
@@ -1645,7 +1648,7 @@ impl StorageState {
 
     pub async fn handle_quorum(
         self,
-        sender: Arc<Mutex<SendStream>>,
+        sender: &mut SendStream,
         stats: Arc<Mutex<Stats>>,
     ) -> Result<()> {
         let catalogue = self.read_catalog().await?;

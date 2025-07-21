@@ -133,7 +133,6 @@ pub fn split_packet(packet: Packet) -> Vec<Packet> {
     packets
 }
 
-// TO DO : Fix This, Currently made changes to work with Packet protos
 pub async fn reassemble_packets(mut packets: Vec<Packet>) -> Option<Packet> {
     if packets.is_empty() {
         error!("No packets to reassemble");
@@ -156,6 +155,7 @@ pub async fn reassemble_packets(mut packets: Vec<Packet>) -> Option<Packet> {
         }
         res.extend_from_slice(&packet.data);
     }
+    // TO DO : fix this , instead of page size use length 
     res.truncate(PAGE_SIZE as usize);
     Some(Packet::new(0, 00, length, expected_op, res))
 }

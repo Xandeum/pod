@@ -21,7 +21,7 @@ use crate::{
 };
 
 const MAX_CONNECTION_RETRIES: u8 = 3;
-const GOSSIP_INTERVAL_SECS: u64 = 30;
+const GOSSIP_INTERVAL_SECS: u64 = 120;
 const MAX_GOSSIP_PEERS: usize = 3;
 const MAX_INACTIVITY_PERIOD_IN_SECS: u64 = 60 * 60;
 pub const GOSSIP_PORT: u16 = 9000;
@@ -167,21 +167,21 @@ async fn handle_incoming_gossip(
     // 1. Accept a bidirectional stream from the peer who connected to us.
     let (mut send, mut recv) = connection.accept_bi().await?;
 
-    let packet = receive_packets(Arc::new(Mutex::new(recv)), stats.clone()).await?;
+    let packet = receive_packets(&mut recv, stats.clone()).await?;
 
     if packet.meta.unwrap().op() != AtlasOperation::Gossip {
         error!("Invalid Packet type");
     }
 
     let list: PeerList = deserialize(&packet.data)?;
-    {
-        let mut local_list_guard = peer_list.write().await;
+    // {
+    //     let mut local_list_guard = peer_list.write().await;
 
-        for peer in list.list.clone() {
-            local_list_guard.add(peer.addr, false);
-        }
-        local_list_guard.add(connection.remote_address(), true);
-    }
+    //     for peer in list.list.clone() {
+    //         local_list_guard.add(peer.addr, false);
+    //     }
+    //     local_list_guard.add(connection.remote_address(), true);
+    // }
 
     let list_to_send = {
         let list_guard = peer_list.read().await;
@@ -194,6 +194,15 @@ async fn handle_incoming_gossip(
         connection.remote_address()
     );
 
+    let received_list: PeerList = deserialize(&packet.data)?;
+    {
+        let mut local_list_guard = peer_list.write().await;
+        for peer in received_list.list {
+            local_list_guard.add(peer.addr, false);
+        }
+        local_list_guard.add(connection.remote_address(), true);
+    }
+
     let data_to_send = serialize(&list_to_send)?;
 
     let packet = Packet::new(
@@ -204,20 +213,14 @@ async fn handle_incoming_gossip(
         data_to_send,
     );
 
-    send_packets(Arc::new(Mutex::new(send)), packet, stats.clone()).await?;
-
-    let mut local_list_guard = peer_list.write().await;
-    for peer in list.list {
-        local_list_guard.add(peer.addr, false);
-    }
-    local_list_guard.add(connection.remote_address(), true);
+    send_packets(&mut send, packet.clone(), stats.clone()).await?;
 
     Ok(())
 }
 
 async fn share_peer_list(
     peer_list: Arc<RwLock<PeerList>>,
-    sender_stream: Arc<tokio::sync::Mutex<SendStream>>,
+    sender_stream: &mut SendStream,
     stats: Arc<Mutex<Stats>>,
 ) -> Result<()> {
     let list_guard = peer_list.read().await;

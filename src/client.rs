@@ -72,15 +72,15 @@ pub async fn connect_and_handle_stream(
     loop {
         let stats_clone = stats.clone();
         match connection.accept_bi().await {
-            Ok((send, recv)) => {
+            Ok((mut send, mut recv)) => {
                 info!("Accepted A Bi Stream");
-                let sender = Arc::new(tokio::sync::Mutex::new(send));
-                let receiver = Arc::new(tokio::sync::Mutex::new(recv));
+                // let sender = Arc::new(tokio::sync::Mutex::new(send));
+                // let receiver = Arc::new(tokio::sync::Mutex::new(recv));
                 let storage_clone = storage_state.clone();
 
                 tokio::spawn(async move {
                     if let Err(e) =
-                        handle_stream(storage_clone, sender, receiver, stats_clone).await
+                        handle_stream(storage_clone, &mut send, &mut recv, stats_clone).await
                     {
                         error!("Error handling stream: {:?}", e);
                     }
@@ -96,8 +96,8 @@ pub async fn connect_and_handle_stream(
 
 async fn handle_stream(
     storage_state: StorageState,
-    sender: Arc<tokio::sync::Mutex<SendStream>>,
-    receiver: Arc<tokio::sync::Mutex<RecvStream>>,
+    sender: &mut SendStream,
+    receiver: &mut RecvStream,
     stats: Arc<Mutex<Stats>>,
 ) -> Result<()> {
     // Receive packets
@@ -110,7 +110,7 @@ async fn handle_stream(
                 AtlasOperation::Handshake => {
                     info!("Handshake");
                     let pkt = Packet::new_handshake();
-                    let _ = send_packets(sender.clone(), pkt, stats.clone()).await?;
+                    let _ = send_packets(sender, pkt, stats.clone()).await?;
                 }
                 AtlasOperation::PBigbang => {
                     info!("Big bang");
@@ -156,7 +156,7 @@ async fn handle_stream(
                     let peek_data: PeekPayload = deserialize(&packet.data)?;
 
                     let _ = storage_state
-                        .handle_peek(sender.clone(), peek_data, stats.clone())
+                        .handle_peek(sender, peek_data, stats.clone())
                         .await;
                 }
                 AtlasOperation::PPoke => {
@@ -176,15 +176,13 @@ async fn handle_stream(
                 AtlasOperation::Cache => {
                     info!("cache");
                     let _ = storage_state
-                        .handle_cache(packet, sender.clone(), stats.clone())
+                        .handle_cache(packet, sender, stats.clone())
                         .await;
                 }
                 AtlasOperation::Quorum => {
                     info!("quorum");
 
-                    let _ = storage_state
-                        .handle_quorum(sender.clone(), stats.clone())
-                        .await;
+                    let _ = storage_state.handle_quorum(sender, stats.clone()).await;
                 }
                 _ => {
                     info!("not implemented yet");
@@ -203,7 +201,7 @@ async fn handle_stream(
 }
 
 pub async fn receive_packets(
-    receiver: Arc<Mutex<RecvStream>>,
+    receiver: &mut RecvStream,
     stats: Arc<Mutex<Stats>>,
 ) -> Result<Packet> {
     // let mut buffer = vec![0u8; MAX_PACKET_SIZE];
@@ -211,13 +209,14 @@ pub async fn receive_packets(
     let mut packets_chunks = Vec::new();
     let mut expected_total_chunks = 1;
 
-    let mut recv = receiver.lock().await;
+    // let mut recv = receiver.lock().await;
+    let recv = receiver;
     loop {
         let mut buffer = vec![0u8; MAX_PACKET_SIZE];
 
         match recv.read_exact(&mut buffer).await {
             Ok(()) => {
-                info!("buffer len : {:?}", buffer.len());
+                // info!("buffer len : {:?}", buffer.len());
                 let packet: Packet = bincode::deserialize(&buffer)
                     .map_err(|e| anyhow!("Failed to deserialize packet : {:?}", e))?;
 
@@ -253,11 +252,13 @@ pub async fn receive_packets(
 }
 
 pub async fn send_packets(
-    sender_stream: Arc<tokio::sync::Mutex<SendStream>>,
+    sender_stream: &mut SendStream,
     packet: Packet,
     stats: Arc<Mutex<Stats>>,
 ) -> Result<(), Error> {
-    let mut sender = sender_stream.lock().await;
+    // let mut sender = sender_stream.lock().await;
+    let sender = sender_stream;
+
     let packet_chunks = split_packet(packet);
     let chunks_len = packet_chunks.len();
     info!("Sending  : {} Packets", chunks_len);
@@ -265,13 +266,14 @@ pub async fn send_packets(
     for pkt in packet_chunks {
         let s = bincode::serialize(&pkt)
             .map_err(|e| anyhow!("Failed to serialize packet : {:?}", e))?;
+        info!("packet len : {:?}", s.len());
         if let Err(e) = sender.write(&s).await {
             error!("Failed to send data to client  due to : {:?}", e);
         }
     }
 
-    // sleep(Duration::from_secs(5)).await;
-    sender.finish()?;
+    sleep(Duration::from_secs(5)).await;
+    // sender.finish()?;
 
     let mut stat = stats.lock().await;
     stat.packets_sent += chunks_len as u64;
@@ -292,17 +294,17 @@ pub async fn send_and_receive_packets(
     // }
 
     match connection.open_bi().await {
-        Ok((sender, receiver)) => {
+        Ok((mut sender, mut receiver)) => {
             info!("Connection established, Sending data to {:?}", client);
 
-            match send_packets(Arc::new(Mutex::new(sender)), data, stats.clone()).await {
+            match send_packets(&mut sender, data, stats.clone()).await {
                 Ok(()) => info!("Send Packets Finished"),
                 Err(e) => {
                     info!("****Send Packets Failed : {:?}", e);
                     return Err(e.into());
                 }
             }
-            let packet = receive_packets(Arc::new(Mutex::new(receiver)), stats).await?;
+            let packet = receive_packets(&mut receiver, stats).await?;
 
             return Ok(packet);
         }
