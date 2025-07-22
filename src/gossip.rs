@@ -4,7 +4,9 @@ use anyhow::Result;
 use bincode::{deserialize, serialize};
 use chrono::Utc;
 use log::{debug, error, info, trace, warn}; // Added debug and trace
-use quinn::{Connection, Endpoint, RecvStream, SendStream, VarInt}; // Added RecvStream
+use quinn::{Connection, Endpoint, RecvStream, SendStream, VarInt};
+use rand::seq::IndexedRandom;
+// Added RecvStream
 use serde::{Deserialize, Serialize};
 use tokio::{
     sync::{Mutex, RwLock},
@@ -77,7 +79,7 @@ pub async fn start_gossip(
         Endpoint::client(SocketAddr::from(([0, 0, 0, 0], GOSSIP_SERVER_PORT)))?;
 
     server_endpoint.set_server_config(Some(server_config));
-    
+
     // Spawn background tasks for listening and initiating gossip
     tokio::spawn(accept_gossip_connections(
         server_endpoint.clone(),
@@ -142,7 +144,10 @@ async fn handle_incoming_gossip(
     let packet = receive_packets(&mut recv, stats.clone()).await?;
 
     if packet.meta.unwrap().op() != AtlasOperation::Gossip {
-        warn!("[GOSSIP-IN] Received invalid packet type from {}", peer_addr);
+        warn!(
+            "[GOSSIP-IN] Received invalid packet type from {}",
+            peer_addr
+        );
         return Err(anyhow::anyhow!("Invalid Packet type for gossip"));
     }
 
@@ -162,7 +167,7 @@ async fn handle_incoming_gossip(
         }
         local_list_guard.add(peer_addr, true);
     }
-    
+
     // Prepare and send our peer list as a response
     let list_to_send = {
         let list_guard = peer_list.read().await;
@@ -185,7 +190,10 @@ async fn handle_incoming_gossip(
 
     send_packets(&mut send, response_packet, stats.clone()).await?;
 
-    info!("[GOSSIP-IN] Exchange with {} completed successfully.", peer_addr);
+    info!(
+        "[GOSSIP-IN] Exchange with {} completed successfully.",
+        peer_addr
+    );
     Ok(())
 }
 
@@ -201,7 +209,10 @@ pub async fn bootstrap_from_entrypoint(
                 .await
                 .map_err(|_| anyhow::anyhow!("Timed out connecting to entrypoint"))??;
 
-            info!("Successfully bootstrapped from entrypoint: {}", connection.remote_address());
+            info!(
+                "Successfully bootstrapped from entrypoint: {}",
+                connection.remote_address()
+            );
             {
                 let mut peer_list_guard = peer_list.write().await;
                 peer_list_guard.add(connection.remote_address(), true);
@@ -225,26 +236,37 @@ async fn gossip(
     let list_guard = peer_list.read().await;
     let peers_to_send = list_guard.list.clone();
     let data = serialize(&peers_to_send)?;
-    
+
     let packet = Packet::new(
-        0, 
+        0,
         1, // A single request packet has 1 chunk
-        data.len() as u64, 
-        AtlasOperation::Gossip as i32, 
-        data
+        data.len() as u64,
+        AtlasOperation::Gossip as i32,
+        data,
     );
 
-    debug!("[GOSSIP-OUT] Sending peer list ({} entries) to {}", peers_to_send.len(), peer_addr);
+    debug!(
+        "[GOSSIP-OUT] Sending peer list ({} entries) to {}",
+        peers_to_send.len(),
+        peer_addr
+    );
     let response_packet = send_and_receive_packets(connection.clone(), packet, stats).await?;
 
     if response_packet.meta.unwrap().op() != AtlasOperation::Gossip {
-        warn!("[GOSSIP-OUT] Received invalid packet type from {}", peer_addr);
+        warn!(
+            "[GOSSIP-OUT] Received invalid packet type from {}",
+            peer_addr
+        );
         return Err(anyhow::anyhow!("Invalid Packet type in gossip response"));
     }
 
     let received_list: PeerList = deserialize(&response_packet.data)?;
-    debug!("[GOSSIP-OUT] Received peer list with {} entries from {}", received_list.list.len(), peer_addr);
-    
+    debug!(
+        "[GOSSIP-OUT] Received peer list with {} entries from {}",
+        received_list.list.len(),
+        peer_addr
+    );
+
     {
         let mut local_list_guard = peer_list.write().await;
         for peer in received_list.list {
@@ -253,7 +275,10 @@ async fn gossip(
         local_list_guard.add(peer_addr, true);
     }
 
-    info!("[GOSSIP-OUT] Exchange with {} completed successfully.", peer_addr);
+    info!(
+        "[GOSSIP-OUT] Exchange with {} completed successfully.",
+        peer_addr
+    );
     Ok(())
 }
 
@@ -262,7 +287,10 @@ async fn start_gossip_loop(
     peer_list: Arc<RwLock<PeerList>>,
     stats: Arc<Mutex<Stats>>,
 ) {
-    info!("Starting periodic gossip loop (interval: {}s)", GOSSIP_INTERVAL_SECS);
+    info!(
+        "Starting periodic gossip loop (interval: {}s)",
+        GOSSIP_INTERVAL_SECS
+    );
     let mut interval = time::interval(Duration::from_secs(GOSSIP_INTERVAL_SECS));
 
     loop {
@@ -270,9 +298,20 @@ async fn start_gossip_loop(
         trace!("Gossip loop ticked.");
         prune_inactive_peers(peer_list.clone()).await.ok();
 
+        // let peers_to_contact: Vec<SocketAddr> = {
+        //     let list_guard = peer_list.read().await;
+        //     list_guard.list.iter().map(|p| p.addr).take(MAX_GOSSIP_PEERS).collect()
+        // };
+
         let peers_to_contact: Vec<SocketAddr> = {
             let list_guard = peer_list.read().await;
-            list_guard.list.iter().map(|p| p.addr).take(MAX_GOSSIP_PEERS).collect()
+
+            // Randomly choose up to MAX_GOSSIP_PEERS from the list.
+            list_guard
+                .list
+                .choose_multiple(&mut rand::rng(), MAX_GOSSIP_PEERS)
+                .map(|p| p.addr) // Get the address from each chosen peer.
+                .collect()
         };
 
         if peers_to_contact.is_empty() {
@@ -280,7 +319,11 @@ async fn start_gossip_loop(
             continue;
         }
 
-        info!("Starting new gossip cycle with {} peer(s): {:?}", peers_to_contact.len(), peers_to_contact);
+        info!(
+            "Starting new gossip cycle with {} peer(s): {:?}",
+            peers_to_contact.len(),
+            peers_to_contact
+        );
 
         for peer_addr in peers_to_contact {
             let endpoint_clone = endpoint.clone();
@@ -288,13 +331,8 @@ async fn start_gossip_loop(
             let stats_clone = stats.clone();
 
             tokio::spawn(async move {
-                if let Err(e) = gossip_to_peer(
-                    endpoint_clone,
-                    peer_list_clone,
-                    stats_clone,
-                    peer_addr,
-                )
-                .await
+                if let Err(e) =
+                    gossip_to_peer(endpoint_clone, peer_list_clone, stats_clone, peer_addr).await
                 {
                     warn!("Gossip with peer {} failed: {}", peer_addr, e);
                 }
@@ -318,9 +356,11 @@ async fn prune_inactive_peers(peer_list: Arc<RwLock<PeerList>>) -> Result<()> {
     let now = Utc::now().timestamp() as u64;
     let mut guard = peer_list.write().await;
     let before = guard.list.len();
-    
-    guard.list.retain(|peer| now.saturating_sub(peer.last_seen) <= MAX_INACTIVITY_PERIOD_IN_SECS);
-    
+
+    guard
+        .list
+        .retain(|peer| now.saturating_sub(peer.last_seen) <= MAX_INACTIVITY_PERIOD_IN_SECS);
+
     let after = guard.list.len();
     let pruned_count = before - after;
 
@@ -328,8 +368,7 @@ async fn prune_inactive_peers(peer_list: Arc<RwLock<PeerList>>) -> Result<()> {
         // This is an important maintenance event.
         info!(
             "Pruned {} inactive peer(s). {} peers remain.",
-            pruned_count,
-            after
+            pruned_count, after
         );
     }
 

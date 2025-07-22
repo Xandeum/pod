@@ -1,13 +1,9 @@
 use anyhow::Result;
 use log::info;
 use pod::{
-    client::{
-        configure_client, configure_gossip_client, configure_server, set_default_client,
-        start_stream_loop,
-    },
+    client::{configure_client, configure_gossip_client, set_default_client, start_stream_loop},
     gossip::{self, bootstrap_from_entrypoint, start_gossip, PeerList, GOSSIP_PORT},
     logger::init_logger,
-    protos::{DirectoryEntry, Inode, MkDirPayload},
     server::start_server,
     stats::Stats,
     storage::StorageState,
@@ -25,10 +21,6 @@ const ATLAS_IP: &str = "65.108.233.175:6000"; // trynet
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // rustls::crypto::ring::default_provider()
-    //     .install_default()
-    //     .map_err(|e| anyhow::anyhow!("Failed to install CryptoProvider: {:?}", e))?;
-
     let args: Vec<String> = std::env::args().collect();
 
     if args.contains(&"--version".to_string()) {
@@ -38,6 +30,7 @@ async fn main() -> Result<()> {
 
     let mut entrypoint: Option<SocketAddr> = None;
     let mut no_entrypoint = false;
+    let mut atlas_ip: Option<String> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -52,6 +45,14 @@ async fn main() -> Result<()> {
             }
             "--no-entrypoint" => {
                 no_entrypoint = true;
+            }
+            "--atlas-ip" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Expected argument after --atlas-ip");
+                    std::process::exit(1);
+                }
+                atlas_ip = Some(args[i + 1].clone());
+                i += 1;
             }
             _ => {
                 eprintln!("Unknown argument: {}", args[i]);
@@ -70,6 +71,11 @@ async fn main() -> Result<()> {
         std::process::exit(1);
     }
 
+    let atlas_ip = match atlas_ip {
+        Some(ip) => ip,
+        None => ATLAS_IP.to_string(),
+    };
+
     let _ = init_logger();
 
     // Setting Default client , No need to set it anywhere
@@ -84,7 +90,7 @@ async fn main() -> Result<()> {
     gossip_client_endpoint.set_default_client_config(configure_gossip_client()?);
 
     endpoint.set_default_client_config(client_config);
-    let addr = SocketAddr::from_str(ATLAS_IP)?;
+    let addr = SocketAddr::from_str(&atlas_ip)?;
 
     let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
@@ -113,7 +119,7 @@ async fn main() -> Result<()> {
         gossip_client_endpoint.clone(),
     )
     .await?;
-    let _ = start_gossip(peer_list, stats.clone(),gossip_client_endpoint).await?;
+    let _ = start_gossip(peer_list, stats.clone(), gossip_client_endpoint).await?;
 
     let stats_clone = stats.clone();
     let client_handle = tokio::spawn(async move {
