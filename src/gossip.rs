@@ -3,7 +3,7 @@ use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 use anyhow::Result;
 use bincode::{deserialize, serialize};
 use chrono::Utc;
-use log::{debug, error, info, trace, warn}; // Added debug and trace
+use log::{debug, error, info, trace, warn};
 use quinn::{Connection, Endpoint, RecvStream, SendStream, VarInt};
 use rand::seq::IndexedRandom;
 // Added RecvStream

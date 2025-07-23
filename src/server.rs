@@ -11,6 +11,7 @@ use tokio::{fs::OpenOptions, sync::Mutex};
 use crate::{
     stats::{update_system_stats, AppState, CombinedStats, Stats},
     storage::{Metadata, FILE_PATH},
+    rpc,
 };
 
 #[derive(Serialize)]
@@ -85,6 +86,7 @@ pub async fn start_server(meta: Arc<Mutex<Metadata>>, stats: Arc<Mutex<Stats>>) 
         .route("/", get(root))
         .route("/stats", get(get_stats))
         .route("/stats-page", get(get_stats_page))
+        .merge(rpc::rpc_router())
         .with_state(app_state);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3500));

@@ -6,6 +6,7 @@ pub mod storage;
 pub mod packet;
 pub mod stats;
 pub mod gossip;
+pub mod rpc;
 pub mod protos {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
 }
