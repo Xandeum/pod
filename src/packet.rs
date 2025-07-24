@@ -4,7 +4,7 @@ use log::{error, info};
 pub use crate::protos::{AtlasOperation, Meta, Packet};
 // use serde::{Deserialize, Serialize};
 
-pub const PACKET_META_SIZE: usize = 36;
+pub const PACKET_META_SIZE: usize = 29;
 pub const MAX_DATA_IN_PACKET: usize = 1232;
 pub const MAX_PACKET_SIZE: usize = PACKET_META_SIZE + MAX_DATA_IN_PACKET;
 
@@ -34,12 +34,13 @@ pub const MAX_PACKET_SIZE: usize = PACKET_META_SIZE + MAX_DATA_IN_PACKET;
 // // }
 
 impl Packet {
-    pub fn new(page_no: u64, offset: u32, length: u32, op: i32, data: Vec<u8>) -> Self {
+    pub fn new(chunk_seq: u32, total_chunks: u32, length: u64, op: i32, data: Vec<u8>) -> Self {
         Packet {
             meta: Some(Meta {
                 op,
-                chunk_seq: 0,
-                total_chunks: 1,
+                chunk_seq: chunk_seq,
+                total_chunks: total_chunks,
+                length: length,
             }),
             data,
         }
@@ -57,6 +58,7 @@ impl Packet {
                 op: AtlasOperation::PPoke as i32,
                 chunk_seq,
                 total_chunks,
+                length: 0,
             }),
             data,
         }
@@ -81,24 +83,27 @@ impl Packet {
                 op: AtlasOperation::Handshake as i32,
                 chunk_seq: 0,
                 total_chunks: 1,
+                length: 0,
             }),
             data: [0u8; MAX_DATA_IN_PACKET].to_vec(),
         }
     }
 }
 
-// TO DO : Fix This, Currently made changes to work with Packet protos
 pub fn split_packet(packet: Packet) -> Vec<Packet> {
     if packet.meta.unwrap().op != AtlasOperation::PPoke as i32
         || packet.data.len() <= MAX_DATA_IN_PACKET
     {
+        let mut data = packet.clone().data;
+        data.resize(MAX_DATA_IN_PACKET, 0);
         return vec![Packet {
             meta: Some(Meta {
                 chunk_seq: 0,
                 total_chunks: 1,
                 op: packet.meta.unwrap().op,
+                length: packet.data.len() as u64,
             }),
-            ..packet
+            data: data,
         }];
     }
 
@@ -108,18 +113,26 @@ pub fn split_packet(packet: Packet) -> Vec<Packet> {
     let total_chunks = ((packet.data.len() as u64 + MAX_DATA_IN_PACKET as u64 - 1)
         / MAX_DATA_IN_PACKET as u64) as u32;
 
-    for (i, chunk) in packet.data.chunks(MAX_DATA_IN_PACKET).enumerate() {
+    let pkt = packet.clone();
+
+    for (i, chunk) in packet.data.clone().chunks(MAX_DATA_IN_PACKET).enumerate() {
+        let data = pkt.data.clone();
         let mut chunk_vec = chunk.to_vec();
         chunk_vec.resize(MAX_DATA_IN_PACKET, 0);
 
-        let chunk_offset = 0;
-        let chunk_packet = Packet::new_poke(0, chunk_offset, chunk_vec, i as u32, total_chunks);
+        // let chunk_offset = 0;
+        let chunk_packet = Packet::new(
+            i as u32,
+            total_chunks,
+            pkt.data.clone().len() as u64,
+            packet.meta.unwrap().op,
+            data,
+        );
         packets.push(chunk_packet);
     }
     packets
 }
 
-// TO DO : Fix This, Currently made changes to work with Packet protos
 pub async fn reassemble_packets(mut packets: Vec<Packet>) -> Option<Packet> {
     if packets.is_empty() {
         error!("No packets to reassemble");
@@ -129,6 +142,7 @@ pub async fn reassemble_packets(mut packets: Vec<Packet>) -> Option<Packet> {
 
     let expected_total_chunks = first.meta.unwrap().total_chunks;
     let expected_op = first.meta.unwrap().op;
+    let length = first.meta.unwrap().length;
 
     packets.sort_by_key(|p| p.meta.unwrap().chunk_seq);
 
@@ -141,6 +155,7 @@ pub async fn reassemble_packets(mut packets: Vec<Packet>) -> Option<Packet> {
         }
         res.extend_from_slice(&packet.data);
     }
+    // TO DO : fix this , instead of page size use length 
     res.truncate(PAGE_SIZE as usize);
-    Some(Packet::new(0, 00, 0, expected_op, res))
+    Some(Packet::new(0, 00, length, expected_op, res))
 }
