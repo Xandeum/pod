@@ -6,11 +6,12 @@ use std::{
     net::SocketAddr,
     sync::Arc,
 };
-use tokio::{fs::OpenOptions, sync::Mutex};
+use tokio::{fs::OpenOptions, sync::{Mutex, RwLock}};
 
 use crate::{
     stats::{update_system_stats, AppState, CombinedStats, Stats},
     storage::{Metadata, FILE_PATH},
+    gossip::PeerList,
     rpc,
 };
 
@@ -74,13 +75,17 @@ async fn get_stats_page(state: State<AppState>) -> Html<String> {
     Html(html)
 }
 
-pub async fn start_server(meta: Arc<Mutex<Metadata>>, stats: Arc<Mutex<Stats>>) -> Result<()> {
+pub async fn start_server(
+    meta: Arc<Mutex<Metadata>>, 
+    stats: Arc<Mutex<Stats>>,
+    peer_list: Arc<RwLock<PeerList>>
+) -> Result<()> {
     let stats_clone = stats.clone();
     tokio::spawn(async move {
         update_system_stats(stats_clone).await;
     });
 
-    let app_state = AppState { meta, stats };
+    let app_state = AppState { meta, stats, peer_list };
 
     let app = Router::new()
         .route("/", get(root))

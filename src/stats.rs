@@ -2,9 +2,9 @@ use std::{sync::Arc, time::Duration};
 
 use serde::Serialize;
 use sysinfo::System;
-use tokio::{sync::Mutex, time::Instant};
+use tokio::{sync::{Mutex, RwLock}, time::Instant};
 
-use crate::storage::Metadata;
+use crate::{storage::Metadata, gossip::PeerList};
 
 #[derive(Serialize, Clone)]
 pub struct Stats {
@@ -20,6 +20,7 @@ pub struct Stats {
 pub struct AppState {
     pub meta: Arc<Mutex<Metadata>>,
     pub stats: Arc<Mutex<Stats>>,
+    pub peer_list: Arc<RwLock<PeerList>>,
 }
 
 #[derive(Serialize)]

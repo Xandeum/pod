@@ -2,6 +2,7 @@ use axum::{extract::State, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use chrono::{DateTime, Utc};
 
 use crate::stats::{AppState, CombinedStats};
 use crate::storage::FILE_PATH;
@@ -34,6 +35,20 @@ struct VersionInfo {
     version: &'static str,
 }
 
+#[derive(Serialize)]
+struct PodInfo {
+    address: String,
+    version: String,
+    last_seen: String,
+    last_seen_timestamp: u64,
+}
+
+#[derive(Serialize)]
+struct PodsResponse {
+    pods: Vec<PodInfo>,
+    total_count: usize,
+}
+
 async fn rpc_handler(state: State<AppState>, Json(req): Json<RpcRequest>) -> Json<serde_json::Value> {
     let id = req.id.clone();
     match req.method.as_str() {
@@ -63,6 +78,33 @@ async fn rpc_handler(state: State<AppState>, Json(req): Json<RpcRequest>) -> Jso
             Json(serde_json::to_value(RpcResponse {
                 jsonrpc: "2.0",
                 result: Some(combined),
+                error: None,
+                id,
+            }).unwrap())
+        }
+        "get-pods" => {
+            let peer_list = state.peer_list.read().await;
+            let pods: Vec<PodInfo> = peer_list.list.iter().map(|peer| {
+                let last_seen_dt = DateTime::<Utc>::from_timestamp(peer.last_seen as i64, 0)
+                    .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                    .unwrap_or_else(|| "Invalid timestamp".to_string());
+                
+                PodInfo {
+                    address: peer.addr.to_string(),
+                    version: peer.version.clone().unwrap_or_else(|| "unknown".to_string()),
+                    last_seen: last_seen_dt,
+                    last_seen_timestamp: peer.last_seen,
+                }
+            }).collect();
+            
+            let pods_response = PodsResponse {
+                total_count: pods.len(),
+                pods,
+            };
+            
+            Json(serde_json::to_value(RpcResponse {
+                jsonrpc: "2.0",
+                result: Some(pods_response),
                 error: None,
                 id,
             }).unwrap())

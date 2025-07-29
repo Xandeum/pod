@@ -119,7 +119,7 @@ async fn main() -> Result<()> {
         gossip_client_endpoint.clone(),
     )
     .await?;
-    let _ = start_gossip(peer_list, stats.clone(), gossip_client_endpoint).await?;
+    let _ = start_gossip(peer_list.clone(), stats.clone(), gossip_client_endpoint).await?;
 
     let stats_clone = stats.clone();
     let client_handle = tokio::spawn(async move {
@@ -152,7 +152,7 @@ async fn main() -> Result<()> {
     // st.handle_mkdir(payload).await.unwrap();
 
     let server_handle = tokio::spawn(async move {
-        let _ = start_server(metadata, stats.clone()).await;
+        let _ = start_server(metadata, stats.clone(), peer_list.clone()).await;
     });
     signal::ctrl_c().await?;
 
