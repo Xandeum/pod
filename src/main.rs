@@ -1,6 +1,6 @@
 use anyhow::Result;
 use pod::{
-    client::{configure_client, start_stream_loop},
+    client::{configure_client, start_persistent_stream_loop},
     logger::init_logger,
     server::start_server,
     stats::Stats,
@@ -13,8 +13,8 @@ use tokio::{
     sync::{broadcast, Mutex},
 };
 
-const ATLAS_IP: &str = "95.217.229.171:5000";
-// const ATLAS_IP: &str = "127.0.0.1:5000";
+// const ATLAS_IP: &str = "95.217.229.171:5000";
+const ATLAS_IP: &str = "127.0.0.1:5000";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -29,7 +29,7 @@ async fn main() -> Result<()> {
 
     let client_config = configure_client()?;
 
-    let mut endpoint = Endpoint::client(SocketAddr::from(([0, 0, 0, 0], 5000)))?;
+    let mut endpoint = Endpoint::client(SocketAddr::from(([0, 0, 0, 0], 8400)))?;
 
     endpoint.set_default_client_config(client_config);
     let addr = SocketAddr::from_str(ATLAS_IP)?;
@@ -52,7 +52,7 @@ async fn main() -> Result<()> {
 
     let stats_clone = stats.clone();
     let client_handle = tokio::spawn(async move {
-        start_stream_loop(
+        start_persistent_stream_loop(
             endpoint,
             addr,
             storage_state.clone(),
