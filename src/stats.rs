@@ -14,6 +14,7 @@ pub struct Stats {
     pub uptime: u64,
     pub packets_sent: u64,
     pub packets_received: u64,
+    pub active_streams: u32,
 }
 
 #[derive(Clone)]

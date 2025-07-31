@@ -42,28 +42,32 @@ impl PersistentStreamManager {
     /// Establishes connection and creates the 2 persistent streams
         /// Establishes connection and creates the 2 persistent streams
         pub async fn connect(&mut self) -> Result<()> {
-            info!("Starting persistent connection establishment to {}", self.addr);
-            
-            // Connect to server
-            info!("Attempting QUIC connection...");
+            info!("Establishing connection to Atlas at {}", self.addr);
             self.connection = Some(try_connect(self.endpoint.clone(), self.addr).await?);
             info!("QUIC connection established successfully");
             
             if let Some(ref connection) = self.connection {
-                info!("Creating bidirectional streams...");
+                info!("Creating bidirectional streams");
                 
                 // Create heartbeat stream
-                info!("Opening heartbeat stream...");
                 let (heartbeat_send, heartbeat_recv) = connection.open_bi().await?;
                 self.heartbeat_stream = Some((
                     Arc::new(tokio::sync::Mutex::new(heartbeat_send)),
                     Arc::new(tokio::sync::Mutex::new(heartbeat_recv))
                 ));
-                info!("Heartbeat stream established (Stream #1)");
+                info!("Heartbeat stream established (1/2)");
 
-                sleep(Duration::from_secs(1)).await;
                 
-                // Send initial packet on heartbeat stream so Atlas's accept_bi() sees it
+                // Send initial version packet on heartbeat stream so Atlas knows our version
+                info!("Sending pod version to Atlas...");
+                if let Some((sender, _)) = &self.heartbeat_stream {
+                    let version = env!("CARGO_PKG_VERSION").to_string();
+                    let version_packet = Packet::new_version(version);
+                    send_packets(sender.clone(), version_packet, self.stats.clone()).await?;
+                    info!("Pod version sent to Atlas");
+                }
+                
+                // Send initial heartbeat packet to announce stream
                 info!("Sending initial heartbeat packet to announce stream...");
                 if let Some((sender, _)) = &self.heartbeat_stream {
                     let init_packet = Packet::new_heartbeat();
@@ -72,13 +76,12 @@ impl PersistentStreamManager {
                 }
                 
                 // Create data stream  
-                info!("Opening data stream...");
                 let (data_send, data_recv) = connection.open_bi().await?;
                 self.data_stream = Some((
                     Arc::new(tokio::sync::Mutex::new(data_send)),
                     Arc::new(tokio::sync::Mutex::new(data_recv))
                 ));
-                info!("Data stream established (Stream #2)");
+                info!("Data stream established (2/2)");
                 
                 // Send initial packet on data stream so Atlas's accept_bi() sees it
                 info!("Sending initial handshake packet to announce data stream...");
@@ -88,15 +91,17 @@ impl PersistentStreamManager {
                     info!("Initial handshake packet sent successfully");
                 }
                 
-                // Log final status with stream count
-                let stats = connection.stats();
+                // Update active streams count in stats
                 let stream_count = if self.heartbeat_stream.is_some() && self.data_stream.is_some() { 2 } else { 0 };
-                info!("PERSISTENT CONNECTION READY:");
-                info!("   Active Streams: {}/2 (Heartbeat + Data)", stream_count);
-                info!("   Connection ID: {:?}", connection.stable_id());
-                info!("   Connection Stats: {} packets sent, {} lost packets, RTT: {:?}", 
-                      stats.path.sent_packets, stats.path.lost_packets, stats.path.rtt);
-                info!("   Remote Address: {}", self.addr);
+                {
+                    let mut stats_guard = self.stats.lock().await;
+                    stats_guard.active_streams = stream_count;
+                }
+                
+                // Log final status with stream count
+                let connection_stats = connection.stats();
+                info!("Persistent connection ready: {} streams active, connection ID: {:?}, RTT: {}ms", 
+                      stream_count, connection.stable_id(), connection_stats.path.rtt.as_millis());
             }
             
             Ok(())
@@ -117,9 +122,12 @@ impl PersistentStreamManager {
     }
 
     /// Gets the actual number of open streams from the QUIC connection
+    /// This includes all streams (both our managed ones and any others)
     pub fn get_stream_count(&self) -> u32 {
         if let Some(ref connection) = self.connection {
-            // Count our managed streams
+            // Since Quinn doesn't provide direct access to total active stream count,
+            // we track our managed streams and report that count
+            // In practice, for this application, we expect only our 2 managed streams
             let mut count = 0;
             if self.heartbeat_stream.is_some() {
                 count += 1;
@@ -374,9 +382,7 @@ pub async fn start_persistent_stream_loop(
     // heartbeat stream activity prevents the connection from timing out.
     // The server (atlas) initiates heartbeats, and this client responds.
     
-    info!("Starting persistent stream manager");
-    info!("   Heartbeat mode: Server-initiated (client responds)");
-    info!("   Status logging interval: {}s", STATUS_LOG_INTERVAL);
+    info!("Starting persistent stream manager (heartbeats: server-initiated, status interval: {}s)", STATUS_LOG_INTERVAL);
     
     let mut rx2 = shutdown_rx.resubscribe();
     let mut stream_manager = PersistentStreamManager::new(endpoint, addr, stats);
@@ -390,16 +396,15 @@ pub async fn start_persistent_stream_loop(
         // Try to establish connection and streams
         if !stream_manager.is_connected() {
             connection_attempts += 1;
-            info!("Connection attempt #{} - establishing persistent connection...", connection_attempts);
+            info!("Connection attempt #{}", connection_attempts);
             
             match stream_manager.connect().await {
                 Ok(()) => {
-                    info!("Persistent streams established successfully on attempt #{}", connection_attempts);
+                    info!("Streams established successfully on attempt #{}", connection_attempts);
                     connection_attempts = 0; // Reset counter on success
                 }
                 Err(e) => {
-                    error!("Failed to establish persistent connection (attempt #{}): {}", connection_attempts, e);
-                    error!("   Retrying in {} seconds...", RETRY_INTERVAL);
+                    error!("Connection attempt #{} failed: {} - retrying in {}s", connection_attempts, e, RETRY_INTERVAL);
                     tokio::time::sleep(Duration::from_secs(RETRY_INTERVAL)).await;
                     continue;
                 }
@@ -420,14 +425,9 @@ pub async fn start_persistent_stream_loop(
                 let stats = stream_manager.stats.lock().await;
                 let active_streams = stream_manager.get_stream_count();
                 
-                info!("=== PERIODIC STATUS REPORT ===");
-                info!("   Connection Status: Alive={}, Heartbeat={}, Data={}", conn_alive, hb_available, data_available);
-                info!("   Active Streams: {}/2 (Target: Heartbeat + Data)", active_streams);
-                info!("   Heartbeat Stats: {} responses sent, {} failed responses", successful_heartbeats, failed_heartbeats);
-                info!("   Data Operations: {} handled", data_operations_handled);
-                info!("   Network Stats: {} packets sent, {} packets received", stats.packets_sent, stats.packets_received);
-                info!("   Target Server: {} (server-initiated heartbeats)", stream_manager.addr);
-                info!("===============================");
+                info!("Status report: {} streams active, heartbeats: {}/{} success, {} data operations handled, packets: sent={} received={}", 
+                      active_streams, successful_heartbeats, successful_heartbeats + failed_heartbeats, 
+                      data_operations_handled, stats.packets_sent, stats.packets_received);
             }
             
             // Listen for server-initiated heartbeats
@@ -435,16 +435,18 @@ pub async fn start_persistent_stream_loop(
                 match result {
                     Ok(()) => {
                         successful_heartbeats += 1;
-                        info!("Heartbeat cycle #{} - server ping responded successfully", successful_heartbeats);
-                        
-                        // Log connection health
-                        let (conn_alive, _, _) = stream_manager.connection_status();
-                        info!("   Connection health: {}", if conn_alive { "HEALTHY" } else { "DEGRADED" });
+                        info!("Heartbeat #{} responded successfully", successful_heartbeats);
                     }
                     Err(e) => {
                         failed_heartbeats += 1;
-                        error!("Heartbeat response #{} failed: {}", failed_heartbeats, e);
-                        error!("   Will recreate streams and reconnect...");
+                        error!("Heartbeat #{} failed: {} - reconnecting streams", failed_heartbeats, e);
+                        
+                        // Reset active streams count when recreating stream manager
+                        {
+                            let mut stats_guard = stream_manager.stats.lock().await;
+                            stats_guard.active_streams = 0;
+                        }
+                        
                         stream_manager = PersistentStreamManager::new(stream_manager.endpoint.clone(), stream_manager.addr, stream_manager.stats.clone());
                         continue;
                     }
@@ -453,8 +455,6 @@ pub async fn start_persistent_stream_loop(
             
             // Handle incoming data operations
             result = stream_manager.receive_data_operation() => {
-                info!("Data operation received on data stream");
-                
                 match result {
                     Ok(packet) => {
                         data_operations_handled += 1;
@@ -462,16 +462,22 @@ pub async fn start_persistent_stream_loop(
                         
                         match stream_manager.handle_data_operation(&storage_state, packet).await {
                             Ok(()) => {
-                                info!("Data operation #{} handled successfully", data_operations_handled);
+                                info!("Data operation #{} completed successfully", data_operations_handled);
                             }
                             Err(e) => {
-                                error!("Failed to handle data operation #{}: {}", data_operations_handled, e);
+                                error!("Data operation #{} failed: {}", data_operations_handled, e);
                             }
                         }
                     }
                     Err(e) => {
-                        error!("Failed to receive data operation: {}", e);
-                        error!("   Will recreate streams and reconnect...");
+                        error!("Data stream error: {} - reconnecting streams", e);
+                        
+                        // Reset active streams count when recreating stream manager
+                        {
+                            let mut stats_guard = stream_manager.stats.lock().await;
+                            stats_guard.active_streams = 0;
+                        }
+                        
                         stream_manager = PersistentStreamManager::new(stream_manager.endpoint.clone(), stream_manager.addr, stream_manager.stats.clone());
                         continue;
                     }
@@ -568,6 +574,9 @@ async fn _handle_stream(
             // Respond to heartbeat with heartbeat
             let pkt = Packet::new_heartbeat();
             let _ = send_packets(sender.clone(), pkt, stats.clone()).await?;
+        }
+        Operation::Version => {
+          // do nothing
         }
         Operation::Peek => {
             // Handle peek and send response

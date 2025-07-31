@@ -260,12 +260,12 @@ impl StorageState {
         info!("length: {}", length);
 
         // Validate page_id
-        if page_id >= 200 {
-            return Err(anyhow::anyhow!(
-                "Page ID {} exceeds fixed index size 200",
-                page_id
-            ));
-        }
+        // if page_id >= 200 {
+        //     return Err(anyhow::anyhow!(
+        //         "Page ID {} exceeds fixed index size 200",
+        //         page_id
+        //     ));
+        // }
         let indexes = self.index.lock().await;
         // info!("indexes:{:?}", indexes.index);
 
@@ -304,7 +304,7 @@ impl StorageState {
         // Create response packet
         let response_packet = Packet {
             meta: Meta {
-                op: Operation::Poke,
+                op: Operation::Peek,
                 page_no: page_id,
                 offset,
                 length: length,

@@ -32,6 +32,11 @@ async fn get_stats(state: State<AppState>) -> Json<CombinedStats> {
 
     let metadata = state.meta.lock().await;
     let stats = state.stats.lock().await;
+    
+    log::info!("Stats API request - streams: {}, CPU: {:.1}%, RAM: {:.1}%", 
+               stats.active_streams, stats.cpu_percent, 
+               (stats.ram_used as f64 / stats.ram_total as f64) * 100.0);
+    
     Json(CombinedStats {
         metadata: metadata.clone(),
         stats: stats.clone(),
@@ -64,7 +69,8 @@ async fn get_stats_page(state: State<AppState>) -> Html<String> {
             "{{packets_sent}}",
             &format_with_thousands(packets_sent_per_min),
         )
-        .replace("{{uptime}}", &uptime_formatted);
+        .replace("{{uptime}}", &uptime_formatted)
+        .replace("{{active_streams}}", &stats.active_streams.to_string());
 
     Html(html)
 }
@@ -83,9 +89,10 @@ pub async fn start_server(meta: Arc<Mutex<Metadata>>, stats: Arc<Mutex<Stats>>) 
         // .route("/stats-page", get(get_stats_page))
         .with_state(app_state);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 80));
-    log::info!("Starting web server on {}", addr);
+    let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
+    log::info!("Starting web server on http://{}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    log::info!("Web server ready - UI available at http://{}", addr);
     axum::serve(listener, app.into_make_service()).await?;
 
     Ok(())
@@ -371,6 +378,7 @@ const STATS_TEMPLATE: &str = r###"
 
         <footer class="mt-3 text-center py-3">
             <p class="text-xs text-text-secondary">Last Updated: <span id="lastUpdated">{{last_updated}}</span></p>
+            <p class="text-xs text-text-secondary">Active Streams: <span id="activeStreams">{{active_streams}}</span></p>
         </footer>
     </div>
 
@@ -428,7 +436,8 @@ const STATS_TEMPLATE: &str = r###"
             packets_sent: 0,
             packets_received: 0,
             last_updated: Math.floor(Date.now() / 1000),
-            file_size: 0
+            file_size: 0,
+            active_streams: 0
         };
         let isServerConnected = true;
 
@@ -837,7 +846,8 @@ const STATS_TEMPLATE: &str = r###"
                     packets_sent: Number(stats.packets_sent) || latestStats.packets_sent || 0,
                     packets_received: Number(stats.packets_received) || latestStats.packets_received || 0,
                     last_updated: Number(stats.last_updated) || latestStats.last_updated || Math.floor(Date.now() / 1000),
-                    file_size: Number(stats.file_size) || latestStats.file_size || 0
+                    file_size: Number(stats.file_size) || latestStats.file_size || 0,
+                    active_streams: Number(stats.active_streams) || latestStats.active_streams || 0
                 };
                 console.log('Parsed latestStats:', latestStats);
 
@@ -884,7 +894,8 @@ const STATS_TEMPLATE: &str = r###"
                     packetsReceived: formatWithThousands(packetsReceivedPerMin),
                     packetsSent: formatWithThousands(packetsSentPerMin),
                     cpuPercent: `${Math.round(latestStats.cpu_percent)}%`,
-                    ramPercent: `${Math.round(ramPercent)}%`
+                    ramPercent: `${Math.round(ramPercent)}%`,
+                    activeStreams: `${latestStats.active_streams}`
                 };
                 console.log('DOM updates:', updates);
 
@@ -896,6 +907,7 @@ const STATS_TEMPLATE: &str = r###"
                 document.getElementById('packetsSent').textContent = updates.packetsSent;
                 document.getElementById('cpuPercent').textContent = updates.cpuPercent;
                 document.getElementById('ramPercent').textContent = updates.ramPercent;
+                document.getElementById('activeStreams').textContent = updates.activeStreams;
             } catch (error) {
                 console.error('Error in updateDashboardData:', error);
                 isServerConnected = false;

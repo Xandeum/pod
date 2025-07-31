@@ -11,6 +11,7 @@ pub enum Operation {
     Peek,
     Handshake,
     Heartbeat,
+    Version,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -88,6 +89,27 @@ impl Packet {
                 total_chunks: 1,
             },
             data: [0u8; MAX_DATA_IN_PACKET].to_vec(),
+        }
+    }
+
+    pub fn new_version(version: String) -> Self {
+        let version_bytes = version.as_bytes();
+        let mut data = vec![0u8; MAX_DATA_IN_PACKET];
+        
+        // Copy version string to packet data
+        let copy_len = std::cmp::min(version_bytes.len(), MAX_DATA_IN_PACKET);
+        data[..copy_len].copy_from_slice(&version_bytes[..copy_len]);
+        
+        Packet {
+            meta: Meta {
+                op: Operation::Version,
+                page_no: 0,
+                offset: 0,
+                length: copy_len as u32,
+                chunk_seq: 0,
+                total_chunks: 1,
+            },
+            data,
         }
     }
 

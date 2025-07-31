@@ -26,6 +26,7 @@ async fn main() -> Result<()> {
     }
 
     let _ = init_logger();
+    log::info!("Pod v{} starting - target: {}", env!("CARGO_PKG_VERSION"), ATLAS_IP);
 
     let client_config = configure_client()?;
 
@@ -48,6 +49,7 @@ async fn main() -> Result<()> {
         uptime: 0,
         packets_received: 0,
         packets_sent: 0,
+        active_streams: 0,
     }));
 
     let stats_clone = stats.clone();
