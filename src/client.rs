@@ -86,7 +86,7 @@ impl PersistentStreamManager {
                 // Send initial packet on data stream so Atlas's accept_bi() sees it
                 info!("Sending initial handshake packet to announce data stream...");
                 if let Some((sender, _)) = &self.data_stream {
-                    let init_packet = Packet::new_handshake();
+                    let init_packet = Packet::new_version(env!("CARGO_PKG_VERSION").to_string());
                     send_packets(sender.clone(), init_packet, self.stats.clone()).await?;
                     info!("Initial handshake packet sent successfully");
                 }
