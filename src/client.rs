@@ -59,12 +59,11 @@ impl PersistentStreamManager {
 
                 
                 // Send initial version packet on heartbeat stream so Atlas knows our version
-                info!("Sending pod version to Atlas...");
+                info!("Sending pod heartbeatt to Atlas...");
                 if let Some((sender, _)) = &self.heartbeat_stream {
-                    let version = env!("CARGO_PKG_VERSION").to_string();
-                    let version_packet = Packet::new_version(version);
-                    send_packets(sender.clone(), version_packet, self.stats.clone()).await?;
-                    info!("Pod version sent to Atlas");
+                    let heartbeat_packet = Packet::new_heartbeat();
+                    send_packets(sender.clone(), heartbeat_packet, self.stats.clone()).await?;
+                    info!("Pod heartbeat sent to Atlas");
                 }
                 
                 // Send initial heartbeat packet to announce stream
