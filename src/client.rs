@@ -4,13 +4,11 @@ use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream, Transpor
 use rustls::pki_types::CertificateDer;
 use rustls::RootCertStore;
 use rustls_pemfile::certs;
-use std::fs::File;
 use std::io::BufReader;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, Mutex};
-use tokio::time::sleep;
 
 use crate::cert::AcceptAllVerifier;
 use crate::packet::{reassemble_packets, split_packet, Operation, Packet, MAX_PACKET_SIZE};

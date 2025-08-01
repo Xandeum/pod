@@ -13,8 +13,8 @@ use tokio::{
     sync::{broadcast, Mutex},
 };
 
-// const ATLAS_IP: &str = "95.217.229.171:5000";
-const ATLAS_IP: &str = "127.0.0.1:5000";
+const ATLAS_IP: &str = "95.217.229.171:5000"; //Devnet
+// const ATLAS_IP: &str = "127.0.0.1:5000";
 
 #[tokio::main]
 async fn main() -> Result<()> {

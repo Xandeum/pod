@@ -35,13 +35,13 @@ pub struct CombinedStats {
 pub async fn update_system_stats(stats: Arc<Mutex<Stats>>) {
     let mut sys = System::new_all();
     let start_time = Instant::now();
-    let mut last_packets_sent = 0;
-    let mut last_packets_received = 0;
-    let mut first_iteration = true;
+    // let  last_packets_sent = 0;
+    // let  last_packets_received = 0;
+    // let  first_iteration = true;
 
     loop {
         sys.refresh_all();
-        let mut networks = sysinfo::Networks::new_with_refreshed_list();
+        // let mut networks = sysinfo::Networks::new_with_refreshed_list();
         let mut stats = stats.lock().await;
 
         // let mut packets_sent = 0;
