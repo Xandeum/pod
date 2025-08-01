@@ -18,8 +18,8 @@ use crate::packet::{Meta, Operation, Packet, MAX_DATA_IN_PACKET};
 use crate::stats::Stats;
 use common::consts::PAGE_SIZE;
 
-// pub const FILE_PATH: &str = "/run/xandeum-pod";
-pub const FILE_PATH: &str = "xandeum-pod";
+pub const FILE_PATH: &str = "/run/xandeum-pod";
+// pub const FILE_PATH: &str = "xandeum-pod";
 
 // pub const PAGE_SIZE: usize = 1048576;
 
