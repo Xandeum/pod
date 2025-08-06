@@ -22,20 +22,21 @@ async fn root() -> Json<ApiResponse> {
 }
 
 async fn get_stats(state: State<AppState>) -> Json<CombinedStats> {
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(FILE_PATH)
-        .await
-        .unwrap();
-    let file_size = file.metadata().await.unwrap().len();
-
+    let file_size = match OpenOptions::new().read(true).open(FILE_PATH).await {
+        Ok(file) => match file.metadata().await {
+            Ok(metadata) => metadata.len(),
+            Err(_) => 0,
+        },
+        Err(_) => 0,
+    };
+    
     let metadata = state.meta.lock().await;
     let stats = state.stats.lock().await;
     
-    log::info!("Stats API request - streams: {}, CPU: {:.1}%, RAM: {:.1}%", 
+    log::info!("Stats API request - streams: {}, CPU: {:.1}%, RAM: {:.1}%, last_updated: {}", 
                stats.active_streams, stats.cpu_percent, 
-               (stats.ram_used as f64 / stats.ram_total as f64) * 100.0);
+               (stats.ram_used as f64 / stats.ram_total as f64) * 100.0,
+               metadata.last_updated);
     
     Json(CombinedStats {
         metadata: metadata.clone(),
@@ -45,22 +46,27 @@ async fn get_stats(state: State<AppState>) -> Json<CombinedStats> {
 }
 
 async fn get_stats_page(state: State<AppState>) -> Html<String> {
+    let file_size = match OpenOptions::new().read(true).open(FILE_PATH).await {
+        Ok(file) => match file.metadata().await {
+            Ok(metadata) => metadata.len(),
+            Err(_) => 0,
+        },
+        Err(_) => 0,
+    };
+    
     let metadata = state.meta.lock().await;
     let stats = state.stats.lock().await;
 
-    let total_bytes_formatted = format!(
-        "{} ({})",
-        format_with_thousands(metadata.total_bytes),
-        bytes_to_mib(metadata.total_bytes)
-    );
+    let total_storage_formatted = bytes_to_mib(file_size);
 
     let packets_received_per_min = stats.packets_received * 60;
     let packets_sent_per_min = stats.packets_sent * 60;
     let uptime_formatted = format_uptime(stats.uptime);
 
     let html = STATS_TEMPLATE
+        .replace("{{version}}", env!("CARGO_PKG_VERSION"))
         .replace("{{last_updated}}", &format_timestamp(metadata.last_updated))
-        .replace("{{total_bytes}}", &total_bytes_formatted)
+        .replace("{{total_bytes}}", &total_storage_formatted)
         .replace(
             "{{packets_received}}",
             &format_with_thousands(packets_received_per_min),
@@ -119,6 +125,9 @@ fn bytes_to_mib(bytes: u64) -> String {
 }
 
 fn format_timestamp(timestamp: u64) -> String {
+    if timestamp == 0 {
+        return "Never".to_string();
+    }
     let datetime = DateTime::<Utc>::from_timestamp(timestamp as i64, 0);
     match datetime {
         Some(dt) => dt.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
@@ -290,7 +299,7 @@ const STATS_TEMPLATE: &str = r###"
 <body class="bg-gradient-to-br from-custom-dark-start to-custom-dark-end text-text-primary">
     <div class="container mx-auto p-2 sm:p-3">
         <header class="mb-3 flex justify-between items-center py-3 px-4 bg-card-bg rounded-lg shadow-xl border border-card-border">
-            <h1 class="text-xl sm:text-2xl font-bold text-white">Pod Monitor</h1>
+            <h1 class="text-xl sm:text-2xl font-bold text-white">Pod Monitor <span class="text-sm text-text-secondary">(v{{version}})</span></h1>
             <div class="status connected text-sm" id="serverStatus">Running</div>
         </header>
 
@@ -301,7 +310,7 @@ const STATS_TEMPLATE: &str = r###"
                     <div class="text-lg font-semibold text-white" id="uptime">{{uptime}}</div>
                 </div>
                 <div class="stat-card bg-card-bg p-3 rounded-lg shadow-xl border border-card-border text-center">
-                    <h3 class="text-xs font-medium text-text-secondary mb-1">Total Bytes</h3>
+                    <h3 class="text-xs font-medium text-text-secondary mb-1">Total storage dedicated to the Xandeum Network</h3>
                     <div class="text-lg font-semibold text-white" id="totalBytes">{{total_bytes}}</div>
                 </div>
             </section>
@@ -309,6 +318,16 @@ const STATS_TEMPLATE: &str = r###"
             <section class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-3">
                 <div class="chart-card bg-card-bg p-4 rounded-lg shadow-xl border border-card-border">
                     <h3 class="text-md font-semibold text-text-secondary mb-3">Page Usage</h3>
+                    <div class="grid grid-cols-2 gap-2 mb-3 text-sm">
+                        <div class="text-center">
+                            <div class="text-accent-green font-semibold" id="pagesUsed">0</div>
+                            <div class="text-text-secondary">Pages Used</div>
+                        </div>
+                        <div class="text-center">
+                            <div class="text-accent-blue font-semibold" id="pagesIdle">0</div>
+                            <div class="text-text-secondary">Pages Idle</div>
+                        </div>
+                    </div>
                     <svg id="pageUsageChart" class="pie-chart-svg" viewBox="0 0 200 140">
                         <g class="pie-group"></g>
                     </svg>
@@ -377,7 +396,7 @@ const STATS_TEMPLATE: &str = r###"
         </main>
 
         <footer class="mt-3 text-center py-3">
-            <p class="text-xs text-text-secondary">Last Updated: <span id="lastUpdated">{{last_updated}}</span></p>
+            <p class="text-xs text-text-secondary">Last storage primitive received: <span id="lastUpdated">{{last_updated}}</span></p>
             <p class="text-xs text-text-secondary">Active Streams: <span id="activeStreams">{{active_streams}}</span></p>
         </footer>
     </div>
@@ -397,7 +416,7 @@ const STATS_TEMPLATE: &str = r###"
             return `${mib.toFixed(2)} MiB`;
         }
         function formatTimestamp(timestamp) {
-            if (typeof timestamp !== 'number' || isNaN(timestamp) || timestamp === 0) return 'N/A';
+            if (typeof timestamp !== 'number' || isNaN(timestamp) || timestamp === 0) return 'Never';
             const date = new Date(timestamp * 1000);
             return date.toUTCString().replace(' GMT', ' UTC');
         }
@@ -756,6 +775,10 @@ const STATS_TEMPLATE: &str = r###"
             const pagesIdle = Math.max(0, totalPages - pagesUsed);
             updatePieChart(pagesUsed, pagesIdle);
             setupPieChartHover();
+            
+            // Initialize page usage numbers
+            document.getElementById('pagesUsed').textContent = formatWithThousands(pagesUsed);
+            document.getElementById('pagesIdle').textContent = formatWithThousands(pagesIdle);
         }
 
         function setupPieChartHover() {
@@ -886,10 +909,15 @@ const STATS_TEMPLATE: &str = r###"
                 const pagesIdle = Math.max(0, totalPages - pagesUsed);
                 updatePieChart(pagesUsed, pagesIdle);
                 setupPieChartHover();
+                
+                // Update page usage numbers
+                document.getElementById('pagesUsed').textContent = formatWithThousands(pagesUsed);
+                document.getElementById('pagesIdle').textContent = formatWithThousands(pagesIdle);
 
                 const updates = {
                     uptime: formatUptime(latestStats.uptime),
-                    totalBytes: `${(latestStats.total_bytes).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')} (${bytesToMiB(latestStats.total_bytes)})`,
+                    totalBytes: `${bytesToMiB(latestStats.file_size)}`,
+                    totalBytesValue: `${(latestStats.total_bytes).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')} (${bytesToMiB(latestStats.total_bytes)})`,
                     lastUpdated: formatTimestamp(latestStats.last_updated),
                     packetsReceived: formatWithThousands(packetsReceivedPerMin),
                     packetsSent: formatWithThousands(packetsSentPerMin),
@@ -901,7 +929,7 @@ const STATS_TEMPLATE: &str = r###"
 
                 document.getElementById('uptime').textContent = updates.uptime;
                 document.getElementById('totalBytes').textContent = updates.totalBytes;
-                document.getElementById('totalBytesValue').textContent = updates.totalBytes;
+                document.getElementById('totalBytesValue').textContent = updates.totalBytesValue;
                 document.getElementById('lastUpdated').textContent = updates.lastUpdated;
                 document.getElementById('packetsReceived').textContent = updates.packetsReceived;
                 document.getElementById('packetsSent').textContent = updates.packetsSent;

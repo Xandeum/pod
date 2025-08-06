@@ -233,8 +233,10 @@ impl StorageState {
         indexes.index.insert(index, page_id);
         let index_bytes = indexes.to_bytes()?;
 
-        metadata.last_updated = Utc::now().timestamp() as u64;
+        let new_timestamp = Utc::now().timestamp() as u64;
+        metadata.last_updated = new_timestamp;
         metadata.total_bytes += data.len() as u64;
+        info!("Updated metadata.last_updated to: {}", new_timestamp);
         if index >= metadata.total_pages {
             metadata.total_pages = index + 1;
         }
