@@ -30,7 +30,7 @@ async fn main() -> Result<()> {
 
     let client_config = configure_client()?;
 
-    let mut endpoint = Endpoint::client(SocketAddr::from(([0, 0, 0, 0], 8400)))?;
+    let mut endpoint = Endpoint::client(SocketAddr::from(([0, 0, 0, 0], 5000)))?;
 
     endpoint.set_default_client_config(client_config);
     let addr = SocketAddr::from_str(ATLAS_IP)?;
