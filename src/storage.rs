@@ -25,7 +25,7 @@ use crate::protos::{
 use crate::stats::Stats;
 use common::consts::PAGE_SIZE;
 
-pub const FILE_PATH: &str = "xandeum-pod";
+pub const FILE_PATH: &str = "/run/xandeum-pod";
 const INODE_METADATA_SIZE: u64 = 1024;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

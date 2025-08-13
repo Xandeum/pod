@@ -1,0 +1,79 @@
+
+name: Build and Publish to APT Repository (GPG-Free)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish-deb-package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout pod repository
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Install cargo-deb
+        run: cargo install cargo-deb
+      - name: Build Debian package
+        run: cargo deb
+
+      - name: Checkout APT repository
+        uses: actions/checkout@v4
+        with:
+          repository: Xandeum/pod-apt-package
+          path: apt-repo
+          token: ${{ secrets.PAT }}
+
+      - name: Update APT repository metadata
+        run: |
+          # Define paths
+          REPO_DIR="${GITHUB_WORKSPACE}/apt-repo"
+          DEB_DIR="${GITHUB_WORKSPACE}/target/debian"
+
+          # Create the repository structure
+          mkdir -p "${REPO_DIR}/dists/stable/main/binary-amd64"
+          mkdir -p "${REPO_DIR}/pool/main"
+
+          # Copy the built .deb package
+          cp ${DEB_DIR}/*.deb "${REPO_DIR}/pool/main/"
+
+          # Change into the repo directory
+          cd "${REPO_DIR}"
+
+          # Generate and SAVE the metadata files
+          echo "Generating and saving Packages file..."
+          dpkg-scanpackages --multiversion pool > dists/stable/main/binary-amd64/Packages
+
+          echo "Compressing Packages file..."
+          gzip -9 -c dists/stable/main/binary-amd64/Packages > dists/stable/main/binary-amd64/Packages.gz
+
+          echo "Generating and saving Release file..."
+          apt-ftparchive release dists/stable > dists/stable/Release
+
+      - name: Commit and push changes
+        run: |
+          cd "${GITHUB_WORKSPACE}/apt-repo"
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          
+          # Forcefully add all changes, including deletions
+          git add -A .
+          
+          # Add a status log to see what git is about to commit
+          echo "--- Git status before commit: ---"
+          git status
+          
+          # Commit the changes. The --allow-empty flag ensures a commit happens
+          # even if git thinks nothing has changed, which is useful for re-runs.
+          git commit --allow-empty -m "ci: Update APT repo for pod version ${{ github.ref_name }}"
+          
+          # Explicitly push the main branch to the origin remote
+          echo "--- Pushing changes to main branch ---"
+          git push origin main
