@@ -2,36 +2,12 @@ use common::consts::PAGE_SIZE;
 use log::{error, info};
 
 pub use crate::protos::{AtlasOperation, Meta, Packet};
-// use serde::{Deserialize, Serialize};
 
 pub const PACKET_META_SIZE: usize = 29;
 pub const MAX_DATA_IN_PACKET: usize = 1232;
 pub const MAX_PACKET_SIZE: usize = PACKET_META_SIZE + MAX_DATA_IN_PACKET;
 
-// // impl Packet
 
-// // #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
-// // pub enum Operation {
-// //     Poke,
-// //     Peek,
-// //     Handshake
-// // }
-
-// // #[derive(Serialize, Deserialize, Debug, Clone)]
-// // pub struct Packet {
-// //     pub meta: Meta,
-// //     pub data: Vec<u8>,
-// // }
-
-// // #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-// // pub struct Meta {
-// //     pub op: Operation,
-// //     pub page_no: u64,
-// //     pub offset: u32,
-// //     pub length: u32,
-// //     pub chunk_seq: u32,
-// //     pub total_chunks: u32,
-// // }
 
 impl Packet {
     pub fn new(chunk_seq: u32, total_chunks: u32, length: u64, op: i32, data: Vec<u8>) -> Self {
@@ -88,6 +64,39 @@ impl Packet {
             data: [0u8; MAX_DATA_IN_PACKET].to_vec(),
         }
     }
+
+
+    pub fn new_version(version: String) -> Self {
+        let version_bytes = version.as_bytes();
+        let mut data = vec![0u8; MAX_DATA_IN_PACKET];
+        
+        // Copy version string to packet data
+        let copy_len = std::cmp::min(version_bytes.len(), MAX_DATA_IN_PACKET);
+        data[..copy_len].copy_from_slice(&version_bytes[..copy_len]);
+        
+        Packet {
+            meta: Some(Meta {
+                op: AtlasOperation::PVersion as i32,
+                length: copy_len as u64,
+                chunk_seq: 0,
+                total_chunks: 1,
+            }),
+            data,
+        }
+    }
+
+    pub fn new_heartbeat() -> Self {
+        Packet {
+            meta: Some(Meta {
+                op: AtlasOperation::PHeartbeat as i32,
+                length: 0,
+                chunk_seq: 0,
+                total_chunks: 1,
+            }),
+            data: [0u8; MAX_DATA_IN_PACKET].to_vec(),
+        }
+    }
+    
 }
 
 pub fn split_packet(packet: Packet) -> Vec<Packet> {
@@ -155,7 +164,9 @@ pub async fn reassemble_packets(mut packets: Vec<Packet>) -> Option<Packet> {
         }
         res.extend_from_slice(&packet.data);
     }
-    // TO DO : fix this , instead of page size use length 
-    res.truncate(PAGE_SIZE as usize);
-    Some(Packet::new(0, 00, length, expected_op, res))
+    // Fix: Use actual length instead of PAGE_SIZE
+    if length > 0 {
+        res.truncate(length as usize);
+    }
+    Some(Packet::new(0, 0, length, expected_op, res))
 }

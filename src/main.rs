@@ -1,8 +1,10 @@
 use anyhow::Result;
 use log::info;
 use pod::{
-    client::{configure_client, configure_gossip_client, set_default_client, start_stream_loop},
-    gossip::{self, bootstrap_from_entrypoint, start_gossip, PeerList, GOSSIP_PORT},
+    // client::{configure_client, configure_gossip_client, set_default_client, start_stream_loop},
+    // gossip::{self, bootstrap_from_entrypoint, start_gossip, PeerList, GOSSIP_PORT},
+    client::{configure_client, configure_gossip_client, set_default_client, start_persistent_stream_loop},
+    gossip::{self, PeerList, GOSSIP_PORT},
     logger::init_logger,
     server::start_server,
     stats::Stats,
@@ -16,8 +18,8 @@ use tokio::{
 };
 
 // const ATLAS_IP: &str = "65.108.233.175:5000";
-const ATLAS_IP: &str = "65.108.233.175:6000"; // trynet
-                                              // const ATLAS_IP: &str = "127.0.0.1:1800";
+const ATLAS_IP: &str = "65.108.233.175:5000"; // trynet
+// const ATLAS_IP: &str = "127.0.0.1:5000";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -109,21 +111,22 @@ async fn main() -> Result<()> {
         uptime: 0,
         packets_received: 0,
         packets_sent: 0,
+        active_streams:0
     }));
 
     let peer_list = Arc::new(RwLock::new(PeerList { list: vec![] }));
 
-    let _ = bootstrap_from_entrypoint(
-        entrypoint,
-        peer_list.clone(),
-        gossip_client_endpoint.clone(),
-    )
-    .await?;
-    let _ = start_gossip(peer_list.clone(), stats.clone(), gossip_client_endpoint).await?;
+    // let _ = bootstrap_from_entrypoint(
+    //     entrypoint,
+    //     peer_list.clone(),
+    //     gossip_client_endpoint.clone(),
+    // )
+    // .await?;
+    // let _ = start_gossip(peer_list.clone(), stats.clone(), gossip_client_endpoint).await?;
 
     let stats_clone = stats.clone();
     let client_handle = tokio::spawn(async move {
-        start_stream_loop(
+        start_persistent_stream_loop(
             endpoint,
             addr,
             storage_state.clone(),
