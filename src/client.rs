@@ -15,7 +15,7 @@ use rustls::ServerConfig as RustlsServerConfig;
 
 use crate::cert::AcceptAllVerifier;
 use crate::packet::{reassemble_packets, split_packet, AtlasOperation, Packet, MAX_PACKET_SIZE};
-use crate::protos::{ArmageddonData, BigBangData, CachePayload, CreateFilePayload, MkDirPayload, RmDirPayload};
+use crate::protos::{ArmageddonData, BigBangData, CachePayload, CreateFilePayload, GlobalCatalogPage, MkDirPayload, RmDirPayload};
 use crate::protos::{PeekPayload, PokePayload, RenamePayload};
 use crate::stats::Stats;
 use crate::storage::StorageState;
@@ -44,7 +44,7 @@ impl PersistentStreamManager {
 
     /// Establishes connection and creates the 2 persistent streams
         /// Establishes connection and creates the 2 persistent streams
-        pub async fn connect(&mut self) -> Result<()> {
+        pub async fn connect(&mut self, storage_state: StorageState) -> Result<()> {
             info!("Establishing connection to Atlas at {}", self.addr);
             self.connection = Some(try_connect(self.endpoint.clone(), self.addr).await?);
             info!("QUIC connection established successfully");
@@ -92,6 +92,44 @@ impl PersistentStreamManager {
                     send_packets(sender.clone(), init_packet, self.stats.clone()).await?;
                     info!("Initial handshake packet sent successfully");
                 }
+
+                // if let Some((_, receiver)) = &self.data_stream {
+                //     let packet = receive_packets(receiver.clone(), self.stats.clone()).await?;
+                //     info!("Received packet: {:?}", packet.meta);
+
+                //     if packet.meta.as_ref().unwrap().op == AtlasOperation::PPoke as i32 {
+                //         info!("poke packet received : {:?}", packet);
+                //         let received_catalog: GlobalCatalogPage = deserialize(&packet.data)?;
+                //         info!("📖 RECEIVED CATALOG from Atlas: {} filesystems", received_catalog.filesystems.len());
+                        
+                //         for fs in &received_catalog.filesystems {
+                //             info!("  📁 Atlas FS ID: {} (Pod: {})", fs.fs_id, fs.home_pod_id);
+                //         }
+
+                //         // 📝 WRITE CATALOG: Write the received catalog to pod's storage
+                //         info!("📝 WRITING CATALOG: Replacing pod's catalog with received data");
+                //         match storage_state.write_catalog(received_catalog.clone()).await {
+                //             Ok(()) => {
+                //                 info!("✅ CATALOG WRITTEN: Atlas catalog successfully written to pod storage");
+                                
+                //                 // // Verify the write by reading it back
+                //                 // match storage_state.clone().read_catalog().await {
+                //                 //     Ok(written_catalog) => {
+                //                 //         info!("✅ CATALOG VERIFIED: {} filesystems now in pod storage", written_catalog.filesystems.len());
+                //                 //     }
+                //                 //     Err(e) => {
+                //                 //         error!("❌ CATALOG VERIFY FAILED: {}", e);
+                //                 //     }
+                //                 // }
+                //             }
+                //             Err(e) => {
+                //                 error!("❌ CATALOG WRITE ``: {}", e);
+                //             }
+                //         }
+                //     }
+                // }
+
+        
                 
                 // Update active streams count in stats
                 let stream_count = if self.heartbeat_stream.is_some() && self.data_stream.is_some() { 2 } else { 0 };
@@ -433,7 +471,7 @@ pub async fn start_persistent_stream_loop(
             connection_attempts += 1;
             info!("Connection attempt #{}", connection_attempts);
             
-            match stream_manager.connect().await {
+            match stream_manager.connect(storage_state.clone()).await {
                 Ok(()) => {
                     info!("Streams established successfully on attempt #{}", connection_attempts);
                     connection_attempts = 0; // Reset counter on success
@@ -646,6 +684,7 @@ async fn receive_packets(
 
         match recv.read_exact(&mut buffer).await {
             Ok(()) => {
+                info!("buffer : {:?}", buffer);
                 let packet: Packet = bincode::deserialize(&buffer)
                     .map_err(|e| anyhow!("Failed to deserialize packet : {:?}", e))?;
 

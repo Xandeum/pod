@@ -7,7 +7,7 @@ use quinn::SendStream;
 use serde::{Deserialize, Serialize};
 use std::io::ErrorKind;
 use std::sync::Arc;
-use std::{collections::HashMap, io::Error};
+use std::{collections::HashMap, io::Error, sync::atomic::{AtomicU64, Ordering}};
 use tokio::{
     fs::{File, OpenOptions},
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom},
@@ -27,6 +27,9 @@ use common::consts::PAGE_SIZE;
 
 // pub const FILE_PATH: &str = "/run/xandeum-pod";
 pub const FILE_PATH: &str = "xandeum-pod";
+
+// Global operation counter to track operation ordering
+static OPERATION_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 const INODE_METADATA_SIZE: u64 = 1024;
 
@@ -346,9 +349,35 @@ impl StorageState {
     }
 
     pub async fn handle_poke(&self, data: PokePayload, stats: Arc<Mutex<Stats>>) -> Result<()> {
-        info!("✍️  STARTING POKE OPERATION - Writing to page {}, offset {}, {} bytes", 
-               data.page_no, data.offset, data.data.len());
-        info!("poking");
+        let operation_id = chrono::Utc::now().timestamp_nanos();
+        let operation_order = OPERATION_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let start_time = std::time::Instant::now();
+        
+        info!("✍️  POKE-{} [ORDER:{}] STARTING - Page: {}, Offset: {}, Length: {} bytes", 
+               operation_id, operation_order, data.page_no, data.offset, data.data.len());
+        
+        // Log first and last few bytes for debugging
+        let data_preview = if data.data.len() > 10 {
+            format!("First 10 bytes: {:?}, Last 10 bytes: {:?}", 
+                   &data.data[..10], 
+                   &data.data[data.data.len()-10..])
+        } else {
+            format!("All bytes: {:?}", &data.data)
+        };
+        info!("✍️  POKE-{} [ORDER:{}] DATA - {}", operation_id, operation_order, data_preview);
+        
+        // Log in hex format for easier debugging
+        let bytes_to_hex = |bytes: &[u8]| -> String {
+            bytes.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join("")
+        };
+        let hex_preview = if data.data.len() > 20 {
+            format!("Hex: {}...{}", 
+                   bytes_to_hex(&data.data[..10]),
+                   bytes_to_hex(&data.data[data.data.len()-10..]))
+        } else {
+            format!("Hex: {}", bytes_to_hex(&data.data))
+        };
+        info!("✍️  POKE-{} [ORDER:{}] HEX - {}", operation_id, operation_order, hex_preview);
        
         if data.offset + data.data.len() as u64 > PAGE_SIZE - INODE_METADATA_SIZE {
             return Err(anyhow!(
@@ -362,15 +391,39 @@ impl StorageState {
         let mut global_meta = self.metadata.lock().await;
         let mut global_index = self.index.lock().await;
 
-        // Handle new inode creation if provided
+        // Handle inode creation or reuse if provided
         match data.parent_file_inode {
             Some(inode) => {
-                let local_index = global_meta.current_index;
-
-                global_index.index.insert(inode.pages[0], local_index);
-                global_meta.current_index += 1;
-
-                self.write_object(&inode, &[0u8], local_index).await?;
+                let logical_page = inode.pages[0];
+                
+                // Check if this logical page already has a physical mapping
+                let local_index = match global_index.index.get(&logical_page) {
+                    Some(existing_index) => {
+                        info!("✍️  POKE-{} [ORDER:{}] REUSING - Logical page {} already mapped to physical index {} (updating inode, preserving content)", 
+                               operation_id, operation_order, logical_page, existing_index);
+                        
+                        // Update only the inode metadata, preserve existing content bytes
+                        self.write_inode_only(&inode, *existing_index).await?;
+                        
+                        *existing_index
+                    }
+                    None => {
+                        // Create new mapping for this logical page
+                        let new_index = global_meta.current_index;
+                        global_index.index.insert(logical_page, new_index);
+                        global_meta.current_index += 1;
+                        
+                        info!("✍️  POKE-{} [ORDER:{}] NEW_MAPPING - Logical page {} mapped to new physical index {}", 
+                               operation_id, operation_order, logical_page, new_index);
+                        
+                        // Call write_object for new mappings to initialize both inode and content area
+                        self.write_object(&inode, &[0u8], new_index).await?;
+                        new_index
+                    }
+                };
+                
+                info!("✍️  POKE-{} [ORDER:{}] USING - Physical index {} for logical page {}", 
+                       operation_id, operation_order, local_index, logical_page);
             }
             None => {
                 info!("Inode not Present, Checking Poke operation");
@@ -403,7 +456,14 @@ impl StorageState {
             + data.offset
             + INODE_METADATA_SIZE;
 
+        info!("✍️  POKE-{} [ORDER:{}] PHYSICAL - Calculated offset: {} (base: {} + page_idx: {} * page_size: {} + data_offset: {} + inode_meta: {})", 
+               operation_id, operation_order, physical_offset, base_data_area_offset, local_page_index, PAGE_SIZE, data.offset, INODE_METADATA_SIZE);
+
         self.write(physical_offset, &data.data).await?;
+        
+        let elapsed = start_time.elapsed();
+        info!("✍️  POKE-{} [ORDER:{}] COMPLETED - Written {} bytes to page {} at offset {} in {:?}", 
+               operation_id, operation_order, data.data.len(), data.page_no, data.offset, elapsed);
 
         match (data.pod_mapping_inode, data.pods_mapping) {
             (Some(inode), Some(entry)) => {
@@ -496,7 +556,12 @@ impl StorageState {
         data: PeekPayload,
         stats: Arc<Mutex<Stats>>,
     ) -> Result<()> {
-        info!("Handling peek");
+        let operation_id = chrono::Utc::now().timestamp_nanos();
+        let operation_order = OPERATION_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let start_time = std::time::Instant::now();
+        
+        info!("👁️  PEEK-{} [ORDER:{}] STARTING - Page: {}, Offset: {}, Length: {} bytes", 
+               operation_id, operation_order, data.page_no, data.offset, data.length);
         
         // Validate input parameters
         if data.offset + data.length > PAGE_SIZE - INODE_METADATA_SIZE {
@@ -508,11 +573,36 @@ impl StorageState {
             ));
         }
 
-        let data = self
+        let read_data = self
             .read_page_data(data.page_no, data.offset, data.length as usize)
             .await?;
 
-        info!("data : {:?}", data);
+        // Log detailed information about what was read
+        let bytes_to_hex = |bytes: &[u8]| -> String {
+            bytes.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join("")
+        };
+        
+        let data_preview = if read_data.len() > 10 {
+            format!("First 10 bytes: {:?}, Last 10 bytes: {:?}", 
+                   &read_data[..10], 
+                   &read_data[read_data.len()-10..])
+        } else {
+            format!("All bytes: {:?}", &read_data)
+        };
+        info!("👁️  PEEK-{} [ORDER:{}] DATA - {}", operation_id, operation_order, data_preview);
+        
+        let hex_preview = if read_data.len() > 20 {
+            format!("Hex: {}...{}", 
+                   bytes_to_hex(&read_data[..10]),
+                   bytes_to_hex(&read_data[read_data.len()-10..]))
+        } else {
+            format!("Hex: {}", bytes_to_hex(&read_data))
+        };
+        info!("👁️  PEEK-{} [ORDER:{}] HEX - {}", operation_id, operation_order, hex_preview);
+        
+        let elapsed = start_time.elapsed();
+        info!("👁️  PEEK-{} [ORDER:{}] COMPLETED - Read {} bytes from page {} at offset {} in {:?}", 
+               operation_id, operation_order, read_data.len(), data.page_no, data.offset, elapsed);
 
         // // Create response packet
         let response_packet = Packet {
@@ -522,7 +612,7 @@ impl StorageState {
                 total_chunks: 1,
                 length: 0,
             }),
-            data,
+            data: read_data,
         };
 
         info!("response packet : {:?}", response_packet);
@@ -1508,6 +1598,27 @@ impl StorageState {
         self.write(PAGE_SIZE + Metadata::size(), &index.to_bytes()?).await?;
         
         Ok((global_page, local_index))
+    }
+
+    /// Updates only the inode metadata, preserving existing content
+    async fn write_inode_only(
+        &self,
+        inode: &Inode,
+        local_page_index: u64,
+    ) -> Result<()> {
+        let inode_bytes = inode.to_bytes()?;
+
+        let base_data_area_offset = PAGE_SIZE + Metadata::size() + Index::size();
+        let physical_offset = base_data_area_offset + (local_page_index * PAGE_SIZE);
+
+        let mut file_handle = self.file.lock().await;
+        file_handle
+            .seek(std::io::SeekFrom::Start(physical_offset))
+            .await?;
+        file_handle.write_all(&inode_bytes).await?;
+        // Don't write content - preserve existing content bytes
+        drop(file_handle);
+        Ok(())
     }
 
     async fn write_object(

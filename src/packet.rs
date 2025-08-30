@@ -100,8 +100,10 @@ impl Packet {
 }
 
 pub fn split_packet(packet: Packet) -> Vec<Packet> {
-    if packet.meta.unwrap().op != AtlasOperation::PPoke as i32
-        || packet.data.len() <= MAX_DATA_IN_PACKET
+    // if packet.meta.unwrap().op != AtlasOperation::PPoke as i32
+        // || packet.data.len() <= MAX_DATA_IN_PACKET
+        if packet.data.len() <= MAX_DATA_IN_PACKET
+
     {
         let mut data = packet.clone().data;
         data.resize(MAX_DATA_IN_PACKET, 0);
@@ -135,10 +137,11 @@ pub fn split_packet(packet: Packet) -> Vec<Packet> {
             total_chunks,
             pkt.data.clone().len() as u64,
             packet.meta.unwrap().op,
-            data,
+            chunk_vec,
         );
         packets.push(chunk_packet);
     }
+    info!("packets : {:?}", packets);
     packets
 }
 
