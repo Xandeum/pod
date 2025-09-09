@@ -1,17 +1,22 @@
 use anyhow::{anyhow, Error, Result};
+use bincode::deserialize;
 use log::{error, info, warn};
-use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream, TransportConfig, VarInt};
-use rustls::pki_types::CertificateDer;
+use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream, ServerConfig, TransportConfig, VarInt};
+use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use rustls::RootCertStore;
 use rustls_pemfile::certs;
+use std::fs::File;
 use std::io::BufReader;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, Mutex};
+use rustls::ServerConfig as RustlsServerConfig;
 
 use crate::cert::AcceptAllVerifier;
-use crate::packet::{reassemble_packets, split_packet, Operation, Packet, MAX_PACKET_SIZE};
+use crate::packet::{reassemble_packets, split_packet, AtlasOperation, Packet, MAX_PACKET_SIZE};
+use crate::protos::{ArmageddonData, BigBangData, CachePayload, CreateFilePayload, GlobalCatalogPage, MkDirPayload, RmDirPayload};
+use crate::protos::{PeekPayload, PokePayload, RenamePayload};
 use crate::stats::Stats;
 use crate::storage::StorageState;
 
@@ -39,7 +44,7 @@ impl PersistentStreamManager {
 
     /// Establishes connection and creates the 2 persistent streams
         /// Establishes connection and creates the 2 persistent streams
-        pub async fn connect(&mut self) -> Result<()> {
+        pub async fn connect(&mut self, storage_state: StorageState) -> Result<()> {
             info!("Establishing connection to Atlas at {}", self.addr);
             self.connection = Some(try_connect(self.endpoint.clone(), self.addr).await?);
             info!("QUIC connection established successfully");
@@ -87,6 +92,44 @@ impl PersistentStreamManager {
                     send_packets(sender.clone(), init_packet, self.stats.clone()).await?;
                     info!("Initial handshake packet sent successfully");
                 }
+
+                if let Some((_, receiver)) = &self.data_stream {
+                    let packet = receive_packets(receiver.clone(), self.stats.clone()).await?;
+                    info!("Received packet: {:?}", packet.meta);
+
+                    if packet.meta.as_ref().map_or(false, |meta| meta.op == AtlasOperation::PPoke as i32) {
+                        info!("poke packet received : {:?}", packet);
+                        let received_catalog: GlobalCatalogPage = deserialize(&packet.data)?;
+                        info!("📖 RECEIVED CATALOG from Atlas: {} filesystems", received_catalog.filesystems.len());
+                        
+                        for fs in &received_catalog.filesystems {
+                            info!("  📁 Atlas FS ID: {} (Pod: {})", fs.fs_id, fs.home_pod_id);
+                        }
+
+                        // 📝 WRITE CATALOG: Write the received catalog to pod's storage
+                        info!("📝 WRITING CATALOG: Replacing pod's catalog with received data");
+                        match storage_state.write_catalog(received_catalog.clone()).await {
+                            Ok(()) => {
+                                info!("✅ CATALOG WRITTEN: Atlas catalog successfully written to pod storage");
+                                
+                                // Verify the write by reading it back
+                                // match storage_state.clone().read_catalog().await {
+                                //     Ok(written_catalog) => {
+                                //         info!("✅ CATALOG VERIFIED: {} filesystems now in pod storage", written_catalog.filesystems.len());
+                                //     }
+                                //     Err(e) => {
+                                //         error!("❌ CATALOG VERIFY FAILED: {}", e);
+                                //     }
+                                // }
+                            }
+                            Err(e) => {
+                                error!("❌ CATALOG WRITE ``: {}", e);
+                            }
+                        }
+                    }
+                }
+
+        
                 
                 // Update active streams count in stats
                 let stream_count = if self.heartbeat_stream.is_some() && self.data_stream.is_some() { 2 } else { 0 };
@@ -191,7 +234,7 @@ impl PersistentStreamManager {
                     let elapsed = start_time.elapsed();
                     info!("Received packet in {:?}: {:?}", elapsed, packet.meta);
                     
-                    if packet.meta.op == Operation::Heartbeat {
+                    if packet.meta.as_ref().map_or(false, |meta| meta.op == AtlasOperation::PHeartbeat as i32) {
                         info!("Heartbeat response received successfully! RTT: {:?}", elapsed);
                         
                         // Update stats
@@ -201,8 +244,9 @@ impl PersistentStreamManager {
                         
                         Ok(())
                     } else {
-                        error!("Expected heartbeat response, got: {:?}", packet.meta.op);
-                        Err(anyhow!("Expected heartbeat response, got: {:?}", packet.meta.op))
+                        let op_code = packet.meta.as_ref().map(|m| m.op).unwrap_or(-1);
+                        error!("Expected heartbeat response, got: {:?}", op_code);
+                        Err(anyhow!("Expected heartbeat response, got: {:?}", op_code))
                     }
                 }
                 Ok(Err(e)) => {
@@ -232,7 +276,7 @@ impl PersistentStreamManager {
                     let elapsed = start_time.elapsed();
                     info!("Received server packet in {:?}: {:?}", elapsed, packet.meta);
                     
-                    if packet.meta.op == Operation::Heartbeat {
+                    if packet.meta.as_ref().map_or(false, |meta| meta.op == AtlasOperation::PHeartbeat as i32) {
                         info!("Server heartbeat received! Sending response...");
                         
                         // Respond with heartbeat
@@ -249,8 +293,9 @@ impl PersistentStreamManager {
                             }
                         }
                     } else {
-                        error!("Expected heartbeat from server, got: {:?}", packet.meta.op);
-                        Err(anyhow!("Expected heartbeat from server, got: {:?}", packet.meta.op))
+                        let op_code = packet.meta.as_ref().map(|m| m.op).unwrap_or(-1);
+                        error!("Expected heartbeat from server, got: {:?}", op_code);
+                        Err(anyhow!("Expected heartbeat from server, got: {:?}", op_code))
                     }
                 }
                 Err(e) => {
@@ -268,8 +313,10 @@ impl PersistentStreamManager {
     pub async fn send_data_operation(&self, packet: Packet) -> Result<()> {
         let start_time = std::time::Instant::now();
         info!("Sending data operation: {:?}", packet.meta);
-        info!("   Operation: {:?}", packet.meta.op);
-        info!("   Page: {}, Offset: {}, Length: {}", packet.meta.page_no, packet.meta.offset, packet.meta.length);
+        if let Some(meta) = packet.meta.as_ref() {
+            info!("   Operation: {:?}", meta.op);
+        }
+        // info!("   Page: {}, Offset: {}, Length: {}", packet.meta.as_ref().unwrap().page_no, packet.meta.as_ref().unwrap().offset, packet.meta.as_ref().unwrap().length);
         
         if let Some((sender, _)) = &self.data_stream {
             match send_packets(sender.clone(), packet, self.stats.clone()).await {
@@ -299,8 +346,10 @@ impl PersistentStreamManager {
                 Ok(packet) => {
                     let elapsed = start_time.elapsed();
                     info!("Data operation received in {:?}: {:?}", elapsed, packet.meta);
-                    info!("   Operation: {:?}", packet.meta.op);
-                    info!("   Page: {}, Offset: {}, Length: {}", packet.meta.page_no, packet.meta.offset, packet.meta.length);
+                    if let Some(meta) = packet.meta.as_ref() {
+                        info!("   Operation: {:?}", meta.op);
+                    }
+                    // info!("   Page: {}, Offset: {}, Length: {}", packet.meta.as_ref().unwrap().page_no, packet.meta.as_ref().unwrap().offset, packet.meta.as_ref().unwrap().length);
                     info!("   Data size: {} bytes", packet.data.len());
                     Ok(packet)
                 }
@@ -318,47 +367,82 @@ impl PersistentStreamManager {
     /// Handles data operations (Peek/Poke) on the dedicated data stream
     pub async fn handle_data_operation(&self, storage_state: &StorageState, packet: Packet) -> Result<()> {
         let start_time = std::time::Instant::now();
-        info!("Handling data operation: {:?}", packet.meta.op);
-        info!("   Target: Page {}, Offset {}, Length {}", packet.meta.page_no, packet.meta.offset, packet.meta.length);
+
+        let op = packet.meta.as_ref()
+            .ok_or_else(|| anyhow!("Packet missing metadata"))
+            .and_then(|meta| AtlasOperation::try_from(meta.op))?;
+        info!("Handling data operation: {:?}", op);
+        let storage_state_clone = storage_state.clone();
         
-        match packet.meta.op {
-            Operation::Peek => {
-                info!("Processing PEEK operation...");
+        match op {
+            AtlasOperation::Handshake => {
+                let pkt = Packet::new_handshake();
+                // send_packets(sender, pkt, stats.clone()).await?;
+            }
+            AtlasOperation::PBigbang => {
+                info!("Received big bang data: {:?}", packet.data);
+                let big_bang_data: BigBangData = deserialize(&packet.data)?;
+                info!("Received big bang data: {:?}", big_bang_data);
+
+                storage_state_clone.handle_bigbang(big_bang_data).await?;
+            }
+            AtlasOperation::PArmageddon => {
+                let armageddon_data: ArmageddonData = deserialize(&packet.data)?;
+                storage_state_clone.handle_armageddon(armageddon_data).await?;
+            }
+            AtlasOperation::PMkdir => {
+                let mkdir_data: MkDirPayload = deserialize(&packet.data)?;
+                storage_state_clone.handle_mkdir(mkdir_data).await?;
+            }
+            AtlasOperation::PRmdir => {
+                let rmdir_data: RmDirPayload = deserialize(&packet.data)?;
+                storage_state_clone.handle_rmdir(rmdir_data).await?;
+            }
+            AtlasOperation::POpenrw => {
+                let create_file_data: CreateFilePayload = deserialize(&packet.data)?;
+                storage_state_clone.handle_create_file(create_file_data).await?;
+            }
+            AtlasOperation::PPeek => {
+                let peek_data: PeekPayload = deserialize(&packet.data)?;
                 if let Some((sender, _)) = &self.data_stream {
-                    match storage_state.handle_peek(sender.clone(), packet, self.stats.clone()).await {
-                        Ok(()) => {
-                            let elapsed = start_time.elapsed();
-                            info!("PEEK operation completed successfully in {:?}", elapsed);
-                        }
-                        Err(e) => {
-                            error!("PEEK operation failed: {}", e);
-                            return Err(e);
-                        }
-                    }
-                } else {
-                    error!("Data stream sender not available for PEEK response");
-                    return Err(anyhow!("Data stream sender not available"));
+                    storage_state_clone.handle_peek(sender.clone(), peek_data, self.stats.clone()).await?;
                 }
             }
-            Operation::Poke => {
-                info!("Processing POKE operation...");
-                match storage_state.handle_poke(packet).await {
-                    Ok(()) => {
-                        let elapsed = start_time.elapsed();
-                        info!("POKE operation completed successfully in {:?}", elapsed);
-                    }
-                    Err(e) => {
-                        error!("POKE operation failed: {}", e);
-                        return Err(e);
-                    }
+            AtlasOperation::PPoke => {
+                let poke_data: PokePayload = deserialize(&packet.data)?;
+                storage_state_clone.handle_poke(poke_data, self.stats.clone()).await?;
+            }
+            AtlasOperation::PRename => {
+                let rename_data: RenamePayload = deserialize(&packet.data)?;
+                storage_state_clone.handle_rename(rename_data).await?;
+            }
+            AtlasOperation::PQuorum => {
+                if let Some((sender, _)) = &self.data_stream {
+                    storage_state_clone.handle_quorum(sender.clone(), self.stats.clone()).await?;
+                }
+            }
+            AtlasOperation::PCache => {
+                // let cache_data: CachePayload = deserialize(&packet.data)?;
+                if let Some((sender, _)) = &self.data_stream {
+                    storage_state_clone.handle_cache(packet, sender.clone(), self.stats.clone()).await?;
                 }
             }
             _ => {
-                error!("Invalid operation for data stream: {:?}", packet.meta.op);
-                return Err(anyhow!("Invalid operation for data stream: {:?}", packet.meta.op));
+                // warn!("[STREAM-{}] Operation {:?} is not yet implemented.", self.s.id(), op);
+                return Err(anyhow!("Operation {:?} is not yet implemented", op));
             }
         }
-        Ok(())
+    
+    // Err(e) => {
+    //     error!(
+    //         "[STREAM-{}] Received packet with unknown operation code: {:?}",
+    //         sender.id(),
+    //         packet.meta
+    //     );
+    //     return Err(anyhow!("Received packet with unknown operation code: {:?}", packet.meta));
+    // }
+
+Ok(())
     }
 }
 
@@ -395,7 +479,7 @@ pub async fn start_persistent_stream_loop(
             connection_attempts += 1;
             info!("Connection attempt #{}", connection_attempts);
             
-            match stream_manager.connect().await {
+            match stream_manager.connect(storage_state.clone()).await {
                 Ok(()) => {
                     info!("Streams established successfully on attempt #{}", connection_attempts);
                     connection_attempts = 0; // Reset counter on success
@@ -455,7 +539,7 @@ pub async fn start_persistent_stream_loop(
                 match result {
                     Ok(packet) => {
                         data_operations_handled += 1;
-                        info!("Processing data operation #{}: {:?}", data_operations_handled, packet.meta.op);
+                        // info!("Processing data operation #{}: {:?}", data_operations_handled, packet.meta.op);
                         
                         match stream_manager.handle_data_operation(&storage_state, packet).await {
                             Ok(()) => {
@@ -484,110 +568,110 @@ pub async fn start_persistent_stream_loop(
     }
 }
 
-pub async fn _start_stream_loop(
-    endpoint: Endpoint,
-    addr: SocketAddr,
-    storage_state: StorageState,
-    shutdown_rx: &mut broadcast::Receiver<()>,
-    stats: Arc<Mutex<Stats>>,
-) {
-    const RETRY_INTERVAL: u64 = 5;
+// pub async fn _start_stream_loop(
+//     endpoint: Endpoint,
+//     addr: SocketAddr,
+//     storage_state: StorageState,
+//     shutdown_rx: &mut broadcast::Receiver<()>,
+//     stats: Arc<Mutex<Stats>>,
+// ) {
+//     const RETRY_INTERVAL: u64 = 5;
 
-    let mut rx2 = shutdown_rx.resubscribe();
-    loop {
-        tokio::select! {
-            Ok(_) = rx2.recv() => {
-                info!("Shutdown received in start_stream_loop");
-                return ();
-            }
-            result = _connect_and_handle_stream(endpoint.clone(), addr, storage_state.clone(),shutdown_rx,stats.clone()) => {
-                match result {
-                    Ok(()) => {
-                        log::info!("Stream loop completed successfully");
-                        break;
-                    }
-                    Err(e) => {
-                        log::error!("Stream error: {}, retrying in {} seconds", e, RETRY_INTERVAL);
-                        tokio::time::sleep(Duration::from_secs(RETRY_INTERVAL)).await;
-                    }
-                }
-            }
-        }
-    }
-}
+//     let mut rx2 = shutdown_rx.resubscribe();
+//     loop {
+//         tokio::select! {
+//             Ok(_) = rx2.recv() => {
+//                 info!("Shutdown received in start_stream_loop");
+//                 return ();
+//             }
+//             result = _connect_and_handle_stream(endpoint.clone(), addr, storage_state.clone(),shutdown_rx,stats.clone()) => {
+//                 match result {
+//                     Ok(()) => {
+//                         log::info!("Stream loop completed successfully");
+//                         break;
+//                     }
+//                     Err(e) => {
+//                         log::error!("Stream error: {}, retrying in {} seconds", e, RETRY_INTERVAL);
+//                         tokio::time::sleep(Duration::from_secs(RETRY_INTERVAL)).await;
+//                     }
+//                 }
+//             }
+//         }
+//     }
+// }
 
-pub async fn _connect_and_handle_stream(
-    endpoint: Endpoint,
-    addr: SocketAddr,
-    storage_state: StorageState,
-    shutdown_rx: &mut broadcast::Receiver<()>,
-    stats: Arc<Mutex<Stats>>,
-) -> Result<()> {
-    let connection = try_connect(endpoint, addr).await?;
+// pub async fn _connect_and_handle_stream(
+//     endpoint: Endpoint,
+//     addr: SocketAddr,
+//     storage_state: StorageState,
+//     shutdown_rx: &mut broadcast::Receiver<()>,
+//     stats: Arc<Mutex<Stats>>,
+// ) -> Result<()> {
+//     let connection = try_connect(endpoint, addr).await?;
 
-    info!("Connected to server, waiting for streams");
+//     info!("Connected to server, waiting for streams");
 
-    loop {
-        let stats_clone = stats.clone();
-        match connection.accept_bi().await {
-            Ok((send, recv)) => {
-                info!("Accepted A Bi Stream");
-                let sender = Arc::new(tokio::sync::Mutex::new(send));
-                let receiver = Arc::new(tokio::sync::Mutex::new(recv));
-                let storage_clone = storage_state.clone();
+//     loop {
+//         let stats_clone = stats.clone();
+//         match connection.accept_bi().await {
+//             Ok((send, recv)) => {
+//                 info!("Accepted A Bi Stream");
+//                 let sender = Arc::new(tokio::sync::Mutex::new(send));
+//                 let receiver = Arc::new(tokio::sync::Mutex::new(recv));
+//                 let storage_clone = storage_state.clone();
 
-                tokio::spawn(async move {
-                    if let Err(e) =
-                        _handle_stream(storage_clone, sender, receiver, stats_clone).await
-                    {
-                        error!("Error handling stream: {:?}", e);
-                    }
-                });
-            }
-            Err(e) => {
-                error!("Failed to accept bidirectional stream: {:?}", e);
-                return Err(e.into());
-            }
-        }
-    }
-}
+//                 tokio::spawn(async move {
+//                     if let Err(e) =
+//                         _handle_stream(storage_clone, sender, receiver, stats_clone).await
+//                     {
+//                         error!("Error handling stream: {:?}", e);
+//                     }
+//                 });
+//             }
+//             Err(e) => {
+//                 error!("Failed to accept bidirectional stream: {:?}", e);
+//                 return Err(e.into());
+//             }
+//         }
+//     }
+// }
 
-async fn _handle_stream(
-    storage_state: StorageState,
-    sender: Arc<tokio::sync::Mutex<SendStream>>,
-    receiver: Arc<tokio::sync::Mutex<RecvStream>>,
-    stats: Arc<Mutex<Stats>>,
-) -> Result<()> {
-    // Receive packets
-    let packet = receive_packets(receiver, stats.clone()).await?;
+// async fn _handle_stream(
+//     storage_state: StorageState,
+//     sender: Arc<tokio::sync::Mutex<SendStream>>,
+//     receiver: Arc<tokio::sync::Mutex<RecvStream>>,
+//     stats: Arc<Mutex<Stats>>,
+// ) -> Result<()> {
+//     // Receive packets
+//     let packet = receive_packets(receiver, stats.clone()).await?;
 
-    // Handle based on operation
-    match packet.meta.op {
-        Operation::Handshake => {
-            let pkt = Packet::new_handshake();
-            let _ = send_packets(sender.clone(), pkt, stats.clone()).await?;
-        }
-        Operation::Heartbeat => {
-            // Respond to heartbeat with heartbeat
-            let pkt = Packet::new_heartbeat();
-            let _ = send_packets(sender.clone(), pkt, stats.clone()).await?;
-        }
-        Operation::Version => {
-          // do nothing
-        }
-        Operation::Peek => {
-            // Handle peek and send response
-            let _ = storage_state
-                .handle_peek(sender.clone(), packet, stats.clone())
-                .await;
-        }
-        Operation::Poke => {
-            let _ = storage_state.handle_poke(packet).await;
-        }
-    }
+//     // Handle based on operation
+//     match packet.meta.op {
+//         Operation::Handshake => {
+//             let pkt = Packet::new_handshake();
+//             let _ = send_packets(sender.clone(), pkt, stats.clone()).await?;
+//         }
+//         Operation::Heartbeat => {
+//             // Respond to heartbeat with heartbeat
+//             let pkt = Packet::new_heartbeat();
+//             let _ = send_packets(sender.clone(), pkt, stats.clone()).await?;
+//         }
+//         Operation::Version => {
+//           // do nothing
+//         }
+//         Operation::Peek => {
+//             // Handle peek and send response
+//             let _ = storage_state
+//                 .handle_peek(sender.clone(), packet, stats.clone())
+//                 .await;
+//         }
+//         Operation::Poke => {
+//             let _ = storage_state.handle_poke(packet).await;
+//         }
+//     }
 
-    Ok(())
-}
+//     Ok(())
+// }
 
 async fn receive_packets(
     receiver: Arc<Mutex<RecvStream>>,
@@ -608,11 +692,14 @@ async fn receive_packets(
 
         match recv.read_exact(&mut buffer).await {
             Ok(()) => {
+                info!("buffer : {:?}", buffer);
                 let packet: Packet = bincode::deserialize(&buffer)
                     .map_err(|e| anyhow!("Failed to deserialize packet : {:?}", e))?;
 
                 if packets_chunks.is_empty() {
-                    expected_total_chunks = packet.meta.total_chunks;
+                    expected_total_chunks = packet.meta.as_ref()
+                        .map(|meta| meta.total_chunks)
+                        .unwrap_or(1);
                     info!("First chunk received, expecting {} total chunks", expected_total_chunks);
                 }
                 info!("Received packet chunk {}/{}: {:?}", 
@@ -704,17 +791,8 @@ pub async fn try_connect(endpoint: Endpoint, addr: SocketAddr) -> Result<Connect
 }
 
 pub fn configure_client() -> Result<ClientConfig> {
-    rustls::crypto::ring::default_provider()
-        .install_default()
-        .map_err(|e| anyhow::anyhow!("Failed to install CryptoProvider: {:?}", e))?;
-
-    // let cert_file = File::open("server.crt")?;
-    // let mut cert_reader = BufReader::new(cert_file);
-    // let certs: Vec<CertificateDer<'_>> =
-    // certs(&mut cert_reader).collect::<Result<_, std::io::Error>>()?;
-
-    let cert_pem = include_str!("../server.crt");
-    let mut cert_reader = BufReader::new(cert_pem.as_bytes());
+    let cert_file = File::open("server.crt")?;
+    let mut cert_reader = BufReader::new(cert_file);
     let certs: Vec<CertificateDer<'_>> =
         certs(&mut cert_reader).collect::<Result<_, std::io::Error>>()?;
 
@@ -736,15 +814,64 @@ pub fn configure_client() -> Result<ClientConfig> {
 
     let mut transport_config = TransportConfig::default();
     transport_config
-        .max_idle_timeout(Some(Duration::from_secs(3600).try_into().unwrap())) // 1 hour idle timeout - heartbeat keeps it alive
-        .stream_receive_window(VarInt::from_u64(1_000_000).unwrap()) // 1MB per stream
-        .max_concurrent_bidi_streams(VarInt::from_u64(10).unwrap()) // Reduced to 10 since we only need 2 persistent streams
-        .keep_alive_interval(Some(Duration::from_secs(30))); // Send keep-alive every 30 seconds to prevent idle timeout
+        .max_idle_timeout(Some(Duration::from_secs(24 * 60 * 60).try_into().map_err(|e| anyhow!("Invalid timeout: {}", e))?))
+        .stream_receive_window(VarInt::from_u64(1_000_000).map_err(|e| anyhow!("Invalid stream window: {}", e))?) 
+        .max_concurrent_bidi_streams(VarInt::from_u64(100).map_err(|e| anyhow!("Invalid stream count: {}", e))?);
 
     client_config.transport_config(Arc::new(transport_config));
-
-    // Ok(ClientConfig::new(Arc::new(
-    //     quinn::crypto::rustls::QuicClientConfig::try_from(client_config)?,
-    // )))
     Ok(client_config)
+}
+
+pub fn configure_gossip_client() -> Result<ClientConfig> {
+    let mut client_crypto = rustls::ClientConfig::builder()
+        .with_root_certificates(RootCertStore::empty())
+        .with_no_client_auth();
+
+    client_crypto
+        .dangerous()
+        .set_certificate_verifier(Arc::new(AcceptAllVerifier));
+
+    let mut client_config = ClientConfig::new(Arc::new(
+        quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)?,
+    ));
+
+    let mut transport_config = TransportConfig::default();
+    transport_config
+        .max_idle_timeout(Some(Duration::from_secs(60).try_into().map_err(|e| anyhow!("Invalid timeout: {}", e))?))
+        .stream_receive_window(VarInt::from_u64(1_000_000).map_err(|e| anyhow!("Invalid stream window: {}", e))?)
+        .max_concurrent_bidi_streams(VarInt::from_u64(10).map_err(|e| anyhow!("Invalid stream count: {}", e))?);
+
+    client_config.transport_config(Arc::new(transport_config));
+    Ok(client_config)
+}
+
+pub fn configure_server() -> Result<ServerConfig> {
+    let cert = rcgen::generate_simple_self_signed(vec!["atlas".to_string()])?;
+    let cert_der = CertificateDer::from(cert.cert);
+    let key_der = PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der());
+
+    let server_crypto = RustlsServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert_der], key_der.into())?;
+
+    let mut server_config = ServerConfig::with_crypto(Arc::new(
+        quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto)?,
+    ));
+
+    let mut transport_config = TransportConfig::default();
+    transport_config
+        .max_idle_timeout(Some(Duration::from_secs(60).try_into().map_err(|e| anyhow!("Invalid timeout: {}", e))?))
+        .stream_receive_window(VarInt::from_u64(1_000_000).map_err(|e| anyhow!("Invalid stream window: {}", e))?)
+        .max_concurrent_bidi_streams(VarInt::from_u64(10).map_err(|e| anyhow!("Invalid stream count: {}", e))?);
+
+    server_config.transport_config(Arc::new(transport_config));
+    Ok(server_config)
+}
+
+pub fn set_default_client() -> Result<()> {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .map_err(|e| anyhow!("Failed to install CryptoProvider: {:?}", e))?;
+
+    Ok(())
 }

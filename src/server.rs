@@ -2,12 +2,17 @@ use anyhow::Result;
 use axum::{extract::State, response::Html, routing::get, Json, Router};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use std::{net::SocketAddr, sync::Arc};
-use tokio::{fs::OpenOptions, sync::Mutex};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+};
+use tokio::{fs::OpenOptions, sync::{Mutex, RwLock}};
 
 use crate::{
     stats::{update_system_stats, AppState, CombinedStats, Stats},
     storage::{Metadata, FILE_PATH},
+    gossip::PeerList,
+    rpc,
 };
 
 #[derive(Serialize)]
@@ -22,51 +27,41 @@ async fn root() -> Json<ApiResponse> {
 }
 
 async fn get_stats(state: State<AppState>) -> Json<CombinedStats> {
-    let file_size = match OpenOptions::new().read(true).open(FILE_PATH).await {
-        Ok(file) => match file.metadata().await {
-            Ok(metadata) => metadata.len(),
-            Err(_) => 0,
-        },
-        Err(_) => 0,
-    };
-    
+
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(FILE_PATH)
+        .await.unwrap();
+    let file_size = file.metadata().await.unwrap().len();
+
     let metadata = state.meta.lock().await;
     let stats = state.stats.lock().await;
-    
-    log::info!("Stats API request - streams: {}, CPU: {:.1}%, RAM: {:.1}%, last_updated: {}", 
-               stats.active_streams, stats.cpu_percent, 
-               (stats.ram_used as f64 / stats.ram_total as f64) * 100.0,
-               metadata.last_updated);
-    
     Json(CombinedStats {
         metadata: metadata.clone(),
         stats: stats.clone(),
-        file_size,
+        file_size
     })
 }
 
 async fn get_stats_page(state: State<AppState>) -> Html<String> {
-    let file_size = match OpenOptions::new().read(true).open(FILE_PATH).await {
-        Ok(file) => match file.metadata().await {
-            Ok(metadata) => metadata.len(),
-            Err(_) => 0,
-        },
-        Err(_) => 0,
-    };
     
     let metadata = state.meta.lock().await;
     let stats = state.stats.lock().await;
 
-    let total_storage_formatted = bytes_to_mib(file_size);
+    let total_bytes_formatted = format!(
+        "{} ({})",
+        format_with_thousands(metadata.total_bytes),
+        bytes_to_mib(metadata.total_bytes)
+    );
 
     let packets_received_per_min = stats.packets_received * 60;
     let packets_sent_per_min = stats.packets_sent * 60;
     let uptime_formatted = format_uptime(stats.uptime);
 
     let html = STATS_TEMPLATE
-        .replace("{{version}}", env!("CARGO_PKG_VERSION"))
         .replace("{{last_updated}}", &format_timestamp(metadata.last_updated))
-        .replace("{{total_bytes}}", &total_storage_formatted)
+        .replace("{{total_bytes}}", &total_bytes_formatted)
         .replace(
             "{{packets_received}}",
             &format_with_thousands(packets_received_per_min),
@@ -75,30 +70,33 @@ async fn get_stats_page(state: State<AppState>) -> Html<String> {
             "{{packets_sent}}",
             &format_with_thousands(packets_sent_per_min),
         )
-        .replace("{{uptime}}", &uptime_formatted)
-        .replace("{{active_streams}}", &stats.active_streams.to_string());
+        .replace("{{uptime}}", &uptime_formatted);
 
     Html(html)
 }
 
-pub async fn start_server(meta: Arc<Mutex<Metadata>>, stats: Arc<Mutex<Stats>>) -> Result<()> {
+pub async fn start_server(
+    meta: Arc<Mutex<Metadata>>, 
+    stats: Arc<Mutex<Stats>>,
+    peer_list: Arc<RwLock<PeerList>>
+) -> Result<()> {
     let stats_clone = stats.clone();
     tokio::spawn(async move {
         update_system_stats(stats_clone).await;
     });
 
-    let app_state = AppState { meta, stats };
+    let app_state = AppState { meta, stats, peer_list };
 
     let app = Router::new()
-        .route("/", get(get_stats_page))
+        .route("/", get(root))
         .route("/stats", get(get_stats))
-        // .route("/stats-page", get(get_stats_page))
+        .route("/stats-page", get(get_stats_page))
+        .merge(rpc::rpc_router())
         .with_state(app_state);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 80));
-    log::info!("Starting web server on http://{}", addr);
+    let addr = SocketAddr::from(([127, 0, 0, 1], 3500));
+    log::info!("Starting web server on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    log::info!("Web server ready - UI available at http://{}", addr);
     axum::serve(listener, app.into_make_service()).await?;
 
     Ok(())
@@ -125,9 +123,6 @@ fn bytes_to_mib(bytes: u64) -> String {
 }
 
 fn format_timestamp(timestamp: u64) -> String {
-    if timestamp == 0 {
-        return "Never".to_string();
-    }
     let datetime = DateTime::<Utc>::from_timestamp(timestamp as i64, 0);
     match datetime {
         Some(dt) => dt.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
@@ -168,6 +163,7 @@ fn format_uptime(seconds: u64) -> String {
     result.push_str(&format!("{}s", seconds));
     result.trim().to_string()
 }
+
 const STATS_TEMPLATE: &str = r###"
 <!DOCTYPE html>
 <html lang="en" class="dark">
@@ -243,7 +239,7 @@ const STATS_TEMPLATE: &str = r###"
             stroke: #eab308;
         }
         .data-line.totalBytes {
-            stroke: #22c55e;
+            stroke: url(#gradientTotalBytes);
         }
         .data-line.packetsReceived {
             stroke: #22c55e;
@@ -299,7 +295,7 @@ const STATS_TEMPLATE: &str = r###"
 <body class="bg-gradient-to-br from-custom-dark-start to-custom-dark-end text-text-primary">
     <div class="container mx-auto p-2 sm:p-3">
         <header class="mb-3 flex justify-between items-center py-3 px-4 bg-card-bg rounded-lg shadow-xl border border-card-border">
-            <h1 class="text-xl sm:text-2xl font-bold text-white">Pod Monitor <span class="text-sm text-text-secondary">(v{{version}})</span></h1>
+            <h1 class="text-xl sm:text-2xl font-bold text-white">Pod Monitor</h1>
             <div class="status connected text-sm" id="serverStatus">Running</div>
         </header>
 
@@ -310,24 +306,15 @@ const STATS_TEMPLATE: &str = r###"
                     <div class="text-lg font-semibold text-white" id="uptime">{{uptime}}</div>
                 </div>
                 <div class="stat-card bg-card-bg p-3 rounded-lg shadow-xl border border-card-border text-center">
-                    <h3 class="text-xs font-medium text-text-secondary mb-1">Total storage dedicated to the Xandeum Network</h3>
+                    <h3 class="text-xs font-medium text-text-secondary mb-1">Total Bytes</h3>
                     <div class="text-lg font-semibold text-white" id="totalBytes">{{total_bytes}}</div>
                 </div>
             </section>
 
             <section class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-3">
+                <!-- Row 1 -->
                 <div class="chart-card bg-card-bg p-4 rounded-lg shadow-xl border border-card-border">
                     <h3 class="text-md font-semibold text-text-secondary mb-3">Page Usage</h3>
-                    <div class="grid grid-cols-2 gap-2 mb-3 text-sm">
-                        <div class="text-center">
-                            <div class="text-accent-green font-semibold" id="pagesUsed">0</div>
-                            <div class="text-text-secondary">Pages Used</div>
-                        </div>
-                        <div class="text-center">
-                            <div class="text-accent-blue font-semibold" id="pagesIdle">0</div>
-                            <div class="text-text-secondary">Pages Idle</div>
-                        </div>
-                    </div>
                     <svg id="pageUsageChart" class="pie-chart-svg" viewBox="0 0 200 140">
                         <g class="pie-group"></g>
                     </svg>
@@ -346,12 +333,19 @@ const STATS_TEMPLATE: &str = r###"
                     <h3 class="text-md font-semibold text-text-secondary mb-1">Total Bytes Transferred</h3>
                     <div class="text-xl font-semibold text-white mb-3" id="totalBytesValue">{{total_bytes}}</div>
                     <svg id="totalBytesChart" class="chart-svg h-40">
+                        <defs>
+                            <linearGradient id="gradientTotalBytes" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" style="stop-color:#22c55e;stop-opacity:1" />
+                                <stop offset="100%" style="stop-color:#3b82f6;stop-opacity:1" />
+                            </linearGradient>
+                        </defs>
                         <g class="grid-lines"></g>
                         <g class="x-axis"></g>
                         <g class="y-axis"></g>
                         <path class="data-line totalBytes" d="" />
                     </svg>
                 </div>
+                <!-- Row 2 -->
                 <div class="chart-card bg-card-bg p-4 rounded-lg shadow-xl border border-card-border">
                     <h3 class="text-md font-semibold text-text-secondary mb-1">CPU Usage (%)</h3>
                     <div class="text-xl font-semibold text-white mb-3" id="cpuPercent">0%</div>
@@ -372,6 +366,7 @@ const STATS_TEMPLATE: &str = r###"
                         <path class="data-line ram" d="" />
                     </svg>
                 </div>
+                <!-- Row 3 -->
                 <div class="chart-card bg-card-bg p-4 rounded-lg shadow-xl border border-card-border">
                     <h3 class="text-md font-semibold text-text-secondary mb-1">Packets Received/Min</h3>
                     <div class="text-xl font-semibold text-white mb-3" id="packetsReceived">{{packets_received}}</div>
@@ -396,8 +391,7 @@ const STATS_TEMPLATE: &str = r###"
         </main>
 
         <footer class="mt-3 text-center py-3">
-            <p class="text-xs text-text-secondary">Last storage primitive received: <span id="lastUpdated">{{last_updated}}</span></p>
-            <p class="text-xs text-text-secondary">Active Streams: <span id="activeStreams">{{active_streams}}</span></p>
+            <p class="text-xs text-text-secondary">Last Updated: <span id="lastUpdated">{{last_updated}}</span></p>
         </footer>
     </div>
 
@@ -405,9 +399,6 @@ const STATS_TEMPLATE: &str = r###"
         // Formatting functions
         function formatWithThousands(n) {
             if (typeof n !== 'number' && typeof n !== 'string') return 'N/A';
-            // For y-axis labels that might be large, format them concisely
-            if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
-            if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
             return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
         }
         function bytesToMiB(bytes) {
@@ -416,7 +407,7 @@ const STATS_TEMPLATE: &str = r###"
             return `${mib.toFixed(2)} MiB`;
         }
         function formatTimestamp(timestamp) {
-            if (typeof timestamp !== 'number' || isNaN(timestamp) || timestamp === 0) return 'Never';
+            if (typeof timestamp !== 'number' || isNaN(timestamp) || timestamp === 0) return 'N/A';
             const date = new Date(timestamp * 1000);
             return date.toUTCString().replace(' GMT', ' UTC');
         }
@@ -455,8 +446,7 @@ const STATS_TEMPLATE: &str = r###"
             packets_sent: 0,
             packets_received: 0,
             last_updated: Math.floor(Date.now() / 1000),
-            file_size: 0,
-            active_streams: 0
+            file_size: 0
         };
         let isServerConnected = true;
 
@@ -625,20 +615,26 @@ const STATS_TEMPLATE: &str = r###"
             }
         }
 
-        // === FUNCTION WITH NEW SCALING LOGIC IS HERE ===
         function updateChart(svgId, dataKey, formatTooltip, isBytes = false, isPercent = false) {
             const svgElement = document.getElementById(svgId);
-            if (!svgElement) { return; }
+            if (!svgElement) {
+                console.warn(`SVG element ${svgId} not found.`);
+                return;
+            }
 
             initializeSvgWidth(svgElement);
             const actualSvgHeight = svgElement.clientHeight || defaultSvgHeight;
             const actualChartHeight = actualSvgHeight - padding.top - padding.bottom;
-            if (actualChartHeight <= 0) { return; }
+            if (actualChartHeight <= 0) {
+                console.warn(`Chart height for ${svgId} is too small or negative.`);
+                return;
+            }
 
             const data = chartData.map(d => d[dataKey]).filter(v => typeof v === 'number' && !isNaN(v));
             const times = chartData.map(d => d.time instanceof Date ? d.time.getTime() : NaN).filter(t => !isNaN(t));
 
             if (data.length < 1 || times.length < 1) {
+                console.warn(`No valid data for ${svgId}, data:`, data, 'times:', times);
                 const path = svgElement.querySelector('.data-line');
                 if (path) path.setAttribute('d', '');
                 return;
@@ -646,11 +642,17 @@ const STATS_TEMPLATE: &str = r###"
 
             const minValue = Math.min(...data);
             const maxValue = Math.max(...data, 0);
+            const range = Math.max(maxValue - minValue, 1);
             let yMin, yMax, unit = 'bytes';
 
             if (isPercent) {
-                yMin = 0;
-                yMax = 100;
+                yMin = Math.max(0, minValue - range * 0.5);
+                yMax = Math.min(100, maxValue + range * 0.5);
+                if (yMax - yMin < 10) {
+                    const mid = (maxValue + minValue) / 2;
+                    yMin = Math.max(0, mid - 5);
+                    yMax = Math.min(100, mid + 5);
+                }
             } else if (isBytes && maxValue >= 1024 * 1024) {
                 unit = 'MiB';
                 const minMiB = minValue / (1024 * 1024);
@@ -658,29 +660,17 @@ const STATS_TEMPLATE: &str = r###"
                 const rangeMiB = Math.max(maxMiB - minMiB, 0.1);
                 yMin = Math.max(0, minMiB - rangeMiB * 0.2);
                 yMax = maxMiB + rangeMiB * 0.2;
-                if (yMax - yMin < 0.1) yMax = yMin + 0.1;
+                const step = Math.pow(10, Math.floor(Math.log10(rangeMiB))) / 2;
+                yMin = Math.floor(yMin / step) * step;
+                yMax = Math.ceil(yMax / step) * step;
+                if (yMax - yMin < step) yMax = yMin + step;
             } else {
-                // New logic to center the graph for non-percentage charts
-                const midPoint = (maxValue + minValue) / 2;
-                const valueRange = maxValue - minValue;
-
-                if (maxValue === 0) {
-                    yMin = 0;
-                    yMax = 10; // Default range for zero-line
-                } else if (valueRange < midPoint * 0.2 && midPoint > 0) {
-                    // If data is flat, create a viewport around the midpoint
-                    yMin = midPoint * 0.5;
-                    yMax = midPoint * 1.5;
-                } else {
-                    // If data is volatile, show the range with padding
-                    yMin = minValue - valueRange * 0.2;
-                    yMax = maxValue + valueRange * 0.2;
-                }
-            }
-            
-            yMin = Math.max(0, yMin);
-            if (yMax <= yMin) {
-                yMax = yMin + 10; // Ensure yMax is always greater than yMin
+                yMin = Math.max(0, minValue - range * 0.2);
+                yMax = maxValue + range * 0.2;
+                const step = Math.pow(10, Math.floor(Math.log10(range))) / 2;
+                yMin = Math.floor(yMin / step) * step;
+                yMax = Math.ceil(yMax / step) * step;
+                if (yMax - yMin < step) yMax = yMin + step;
             }
 
             console.log(`Chart ${svgId} scaling: yMin=${yMin}, yMax=${yMax}, unit=${unit}, data=`, data);
@@ -707,12 +697,16 @@ const STATS_TEMPLATE: &str = r###"
                 if (i === 0) {
                     pathData += `M ${x.toFixed(2)},${y.toFixed(2)}`;
                 } else {
-                    pathData += ` L ${x.toFixed(2)},${y.toFixed(2)}`;
+                    const prevX = xScale(times[i - 1]);
+                    const prevY = yScale(data[i - 1]);
+                    pathData += ` H ${x.toFixed(2)} V ${y.toFixed(2)}`;
                 }
             }
 
             const path = svgElement.querySelector('.data-line');
-            if (path) { path.setAttribute('d', pathData); }
+            if (path) {
+                path.setAttribute('d', pathData);
+            }
 
             const xAxisGroup = svgElement.querySelector('.x-axis');
             const yAxisGroup = svgElement.querySelector('.y-axis');
@@ -747,13 +741,9 @@ const STATS_TEMPLATE: &str = r###"
                     text.setAttribute('y', y + 3);
                     text.setAttribute('text-anchor', 'end');
                     text.classList.add('y-axis-labels');
-                    let label = "0";
-                    if (yMax > 0) {
-                         label = isPercent ? `${Math.round(value)}%` :
+                    text.textContent = isPercent ? `${Math.round(value)}%` :
                                        unit === 'MiB' ? `${value.toFixed(1)} MiB` :
                                        formatWithThousands(Math.round(value));
-                    }
-                    text.textContent = label;
                     yAxisGroup.appendChild(text);
                 }
             }
@@ -775,10 +765,6 @@ const STATS_TEMPLATE: &str = r###"
             const pagesIdle = Math.max(0, totalPages - pagesUsed);
             updatePieChart(pagesUsed, pagesIdle);
             setupPieChartHover();
-            
-            // Initialize page usage numbers
-            document.getElementById('pagesUsed').textContent = formatWithThousands(pagesUsed);
-            document.getElementById('pagesIdle').textContent = formatWithThousands(pagesIdle);
         }
 
         function setupPieChartHover() {
@@ -869,8 +855,7 @@ const STATS_TEMPLATE: &str = r###"
                     packets_sent: Number(stats.packets_sent) || latestStats.packets_sent || 0,
                     packets_received: Number(stats.packets_received) || latestStats.packets_received || 0,
                     last_updated: Number(stats.last_updated) || latestStats.last_updated || Math.floor(Date.now() / 1000),
-                    file_size: Number(stats.file_size) || latestStats.file_size || 0,
-                    active_streams: Number(stats.active_streams) || latestStats.active_streams || 0
+                    file_size: Number(stats.file_size) || latestStats.file_size || 0
                 };
                 console.log('Parsed latestStats:', latestStats);
 
@@ -909,33 +894,26 @@ const STATS_TEMPLATE: &str = r###"
                 const pagesIdle = Math.max(0, totalPages - pagesUsed);
                 updatePieChart(pagesUsed, pagesIdle);
                 setupPieChartHover();
-                
-                // Update page usage numbers
-                document.getElementById('pagesUsed').textContent = formatWithThousands(pagesUsed);
-                document.getElementById('pagesIdle').textContent = formatWithThousands(pagesIdle);
 
                 const updates = {
                     uptime: formatUptime(latestStats.uptime),
-                    totalBytes: `${bytesToMiB(latestStats.file_size)}`,
-                    totalBytesValue: `${(latestStats.total_bytes).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')} (${bytesToMiB(latestStats.total_bytes)})`,
+                    totalBytes: `${formatWithThousands(latestStats.total_bytes)} (${bytesToMiB(latestStats.total_bytes)})`,
                     lastUpdated: formatTimestamp(latestStats.last_updated),
                     packetsReceived: formatWithThousands(packetsReceivedPerMin),
                     packetsSent: formatWithThousands(packetsSentPerMin),
                     cpuPercent: `${Math.round(latestStats.cpu_percent)}%`,
-                    ramPercent: `${Math.round(ramPercent)}%`,
-                    activeStreams: `${latestStats.active_streams}`
+                    ramPercent: `${Math.round(ramPercent)}%`
                 };
                 console.log('DOM updates:', updates);
 
                 document.getElementById('uptime').textContent = updates.uptime;
                 document.getElementById('totalBytes').textContent = updates.totalBytes;
-                document.getElementById('totalBytesValue').textContent = updates.totalBytesValue;
+                document.getElementById('totalBytesValue').textContent = updates.totalBytes;
                 document.getElementById('lastUpdated').textContent = updates.lastUpdated;
                 document.getElementById('packetsReceived').textContent = updates.packetsReceived;
                 document.getElementById('packetsSent').textContent = updates.packetsSent;
                 document.getElementById('cpuPercent').textContent = updates.cpuPercent;
                 document.getElementById('ramPercent').textContent = updates.ramPercent;
-                document.getElementById('activeStreams').textContent = updates.activeStreams;
             } catch (error) {
                 console.error('Error in updateDashboardData:', error);
                 isServerConnected = false;
