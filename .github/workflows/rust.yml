@@ -19,6 +19,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
+      - name: Install Protocol Buffer Compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          protoc --version
       - name: Install cargo-deb
         run: cargo install cargo-deb
       - name: Build Debian package
