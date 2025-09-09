@@ -1,8 +1,8 @@
 use anyhow::Result;
 use log::info;
 use pod::{
-    client::{configure_client, configure_gossip_client, set_default_client, start_stream_loop},
-    gossip::{self, bootstrap_from_entrypoint, start_gossip, PeerList, GOSSIP_PORT},
+    client::{configure_client, set_default_client, start_persistent_stream_loop},
+    gossip::{bootstrap_from_entrypoint_udp, start_udp_gossip, PeerList, GOSSIP_PORT},
     logger::init_logger,
     server::start_server,
     stats::Stats,
@@ -14,10 +14,10 @@ use tokio::{
     signal,
     sync::{broadcast, Mutex, RwLock},
 };
-
-// const ATLAS_IP: &str = "65.108.233.175:5000";
-const ATLAS_IP: &str = "65.108.233.175:6000"; // trynet
-                                              // const ATLAS_IP: &str = "127.0.0.1:1800";
+const ATLAS_IP: &str = "95.217.229.171:5000"; //Devnet
+// const ATLAS_IP: &str = "65.108.233.175:5000"; // trynet
+// const ATLAS_IP: &str = "127.0.0.1:5000";
+const DEFAULT_BOOTSTRAP: &str = "173.212.207.32:9001"; // Default bootstrap node
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -67,8 +67,17 @@ async fn main() -> Result<()> {
     } else if let Some(addr) = entrypoint {
         println!("Using entrypoint: {}", addr);
     } else {
-        eprintln!("--entrypoint <ip:port> must be provided.");
-        std::process::exit(1);
+        // Use default bootstrap node when no entrypoint is specified
+        match DEFAULT_BOOTSTRAP.parse() {
+            Ok(addr) => {
+                entrypoint = Some(addr);
+                println!("Using default bootstrap node: {}", DEFAULT_BOOTSTRAP);
+            }
+            Err(e) => {
+                eprintln!("Invalid default bootstrap address {}: {}", DEFAULT_BOOTSTRAP, e);
+                std::process::exit(1);
+            }
+        }
     }
 
     let atlas_ip = match atlas_ip {
@@ -83,12 +92,7 @@ async fn main() -> Result<()> {
 
     let client_config = configure_client()?;
 
-    let mut endpoint = Endpoint::client(SocketAddr::from(([0, 0, 0, 0], 1825)))?;
-    let mut gossip_client_endpoint =
-        Endpoint::client(SocketAddr::from(([0, 0, 0, 0], GOSSIP_PORT)))?;
-
-    gossip_client_endpoint.set_default_client_config(configure_gossip_client()?);
-
+    let mut endpoint = Endpoint::client(SocketAddr::from(([0, 0, 0, 0], 5000)))?;
     endpoint.set_default_client_config(client_config);
     let addr = SocketAddr::from_str(&atlas_ip)?;
 
@@ -97,9 +101,7 @@ async fn main() -> Result<()> {
     let mut client_shutdown_rx = shutdown_tx.subscribe();
 
     let storage_state = StorageState::get_or_create_state().await?;
-    // let _ = storage_state
-    //     .bootstrap_dummy_filesystem(0, "127.0.0.1:18268")
-    //     .await?;
+  
     let metadata = storage_state.metadata.clone();
 
     let stats = Arc::new(Mutex::new(Stats {
@@ -109,21 +111,27 @@ async fn main() -> Result<()> {
         uptime: 0,
         packets_received: 0,
         packets_sent: 0,
+        active_streams:0
     }));
 
-    let peer_list = Arc::new(RwLock::new(PeerList { list: vec![] }));
+    let peer_list = Arc::new(RwLock::new(PeerList::new()));
 
-    let _ = bootstrap_from_entrypoint(
-        entrypoint,
-        peer_list.clone(),
-        gossip_client_endpoint.clone(),
-    )
-    .await?;
-    let _ = start_gossip(peer_list, stats.clone(), gossip_client_endpoint).await?;
+    // Bootstrap from entrypoint using UDP (gracefully handle failures)
+    match bootstrap_from_entrypoint_udp(entrypoint, peer_list.clone()).await {
+        Ok(_) => info!("Bootstrap completed successfully"),
+        Err(e) => {
+            if entrypoint.is_some() {
+                warn!("Bootstrap failed, continuing without initial peers: {}", e);
+            }
+        }
+    }
+    
+    // Start UDP gossip service
+    let _ = start_udp_gossip(peer_list.clone(), stats.clone()).await?;
 
     let stats_clone = stats.clone();
     let client_handle = tokio::spawn(async move {
-        start_stream_loop(
+        start_persistent_stream_loop(
             endpoint,
             addr,
             storage_state.clone(),
@@ -133,26 +141,8 @@ async fn main() -> Result<()> {
         .await;
     });
 
-    // let payload = MkDirPayload {
-    //     new_inode: Some(Inode::new(1, "system".to_string(), true, false)),
-    //     directory_entery: Some(DirectoryEntry {
-    //         name: "test_dir".to_string(),
-    //         inode_no: 1,
-    //     }),
-    //     parent_inode: Some(Inode::new(1, "system".to_string(), true, false)),
-    //     directory_entery_parent: Some(DirectoryEntry {
-    //         name: "test_dir".to_string(),
-    //         inode_no: 1,
-    //     }),
-    //     xentires_inode: None,
-    //     xentry_mapping: None,
-    //     pod_mapping_inode: None,
-    //     pods_mapping: None,
-    // };
-    // st.handle_mkdir(payload).await.unwrap();
-
     let server_handle = tokio::spawn(async move {
-        let _ = start_server(metadata, stats.clone()).await;
+        let _ = start_server(metadata, stats.clone(), peer_list.clone()).await;
     });
     signal::ctrl_c().await?;
 

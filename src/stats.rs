@@ -2,9 +2,9 @@ use std::{sync::Arc, time::Duration};
 
 use serde::Serialize;
 use sysinfo::System;
-use tokio::{sync::Mutex, time::Instant};
+use tokio::{sync::{Mutex, RwLock}, time::Instant};
 
-use crate::storage::Metadata;
+use crate::{storage::Metadata, gossip::PeerList};
 
 #[derive(Serialize, Clone)]
 pub struct Stats {
@@ -14,12 +14,14 @@ pub struct Stats {
     pub uptime: u64,
     pub packets_sent: u64,
     pub packets_received: u64,
+    pub active_streams: u32,
 }
 
 #[derive(Clone)]
 pub struct AppState {
     pub meta: Arc<Mutex<Metadata>>,
     pub stats: Arc<Mutex<Stats>>,
+    pub peer_list: Arc<RwLock<PeerList>>,
 }
 
 #[derive(Serialize)]
@@ -34,13 +36,13 @@ pub struct CombinedStats {
 pub async fn update_system_stats(stats: Arc<Mutex<Stats>>) {
     let mut sys = System::new_all();
     let start_time = Instant::now();
-    let mut last_packets_sent = 0;
-    let mut last_packets_received = 0;
-    let mut first_iteration = true;
+    // let  last_packets_sent = 0;
+    // let  last_packets_received = 0;
+    // let  first_iteration = true;
 
     loop {
         sys.refresh_all();
-        let mut networks = sysinfo::Networks::new_with_refreshed_list();
+        // let mut networks = sysinfo::Networks::new_with_refreshed_list();
         let mut stats = stats.lock().await;
 
         // let mut packets_sent = 0;
