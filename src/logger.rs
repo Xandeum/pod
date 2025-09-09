@@ -35,7 +35,7 @@ static LOGGER: OnceLock<Logger> = OnceLock::new();
 pub fn init_logger() -> Result<(), SetLoggerError> {
     let logger = Logger::new();
     LOGGER.set(logger).ok();
-    log::set_logger(LOGGER.get().unwrap())?;
+    log::set_logger(LOGGER.get().expect("Logger should be initialized"))?;
     log::set_max_level(LevelFilter::Info);
     Ok(())
 }

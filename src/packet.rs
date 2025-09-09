@@ -111,7 +111,7 @@ pub fn split_packet(packet: Packet) -> Vec<Packet> {
             meta: Some(Meta {
                 chunk_seq: 0,
                 total_chunks: 1,
-                op: packet.meta.unwrap().op,
+                op: packet.meta.as_ref().map(|m| m.op).unwrap_or(0),
                 length: packet.data.len() as u64,
             }),
             data: data,
@@ -136,7 +136,7 @@ pub fn split_packet(packet: Packet) -> Vec<Packet> {
             i as u32,
             total_chunks,
             pkt.data.clone().len() as u64,
-            packet.meta.unwrap().op,
+            packet.meta.as_ref().map(|m| m.op).unwrap_or(0),
             chunk_vec,
         );
         packets.push(chunk_packet);
@@ -152,16 +152,16 @@ pub async fn reassemble_packets(mut packets: Vec<Packet>) -> Option<Packet> {
     }
     let first = &packets[0];
 
-    let expected_total_chunks = first.meta.unwrap().total_chunks;
-    let expected_op = first.meta.unwrap().op;
-    let length = first.meta.unwrap().length;
+    let expected_total_chunks = first.meta.as_ref().map(|m| m.total_chunks).unwrap_or(1);
+    let expected_op = first.meta.as_ref().map(|m| m.op).unwrap_or(0);
+    let length = first.meta.as_ref().map(|m| m.length).unwrap_or(0);
 
-    packets.sort_by_key(|p| p.meta.unwrap().chunk_seq);
+    packets.sort_by_key(|p| p.meta.as_ref().map(|m| m.chunk_seq).unwrap_or(0));
 
     let mut res = Vec::new();
 
     for (i, packet) in packets.iter().enumerate() {
-        if packet.meta.unwrap().chunk_seq != i as u32 {
+        if packet.meta.as_ref().map(|m| m.chunk_seq).unwrap_or(0) != i as u32 {
             error!("Missing or out or order packet");
             return None;
         }

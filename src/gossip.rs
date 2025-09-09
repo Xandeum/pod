@@ -20,7 +20,7 @@ use tokio::{
 use crate::stats::Stats;
 
 const MAX_CONNECTION_RETRIES: u8 = 3;
-const GOSSIP_INTERVAL_SECS: u64 = 20;
+const GOSSIP_INTERVAL_SECS: u64 = 120;
 const MAX_GOSSIP_PEERS: usize = 3;
 const MAX_INACTIVITY_PERIOD_IN_SECS: u64 = 60 * 60;
 pub const GOSSIP_PORT: u16 = 9000;
@@ -151,17 +151,11 @@ impl UdpGossipManager {
         })
     }
 
-    /// Check if the given address is this node (same IP or same port)
+    /// Check if the given address is this node (only same IP)
     fn is_self(&self, addr: SocketAddr) -> bool {
-        // Check if it's the same IP (internal)
+        // Only check if it's the same IP - different pods can use the same port
         if addr.ip() == self.local_ip {
             info!("Detected self via local IP: {} (local: {})", addr, self.local_ip);
-            return true;
-        }
-        
-        // Check if it's the same port (likely same node on external IP)
-        if addr.port() == self.local_port {
-            info!("Detected self via port: {} (port: {})", addr, self.local_port);
             return true;
         }
         
@@ -490,16 +484,16 @@ pub async fn bootstrap_from_entrypoint_udp(
                                         
                                         let mut peer_list_guard = peer_list.write().await;
                                         
-                                        // Add entrypoint
-                                        if addr.port() != GOSSIP_SERVER_PORT {
+                                        // Add entrypoint (only check IP, not port)
+                                        if addr.ip() != local_ip {
                                             peer_list_guard.add_with_version(addr, true, Some(response_msg.sender_version.clone()));
                                         } else {
                                             info!("Ignoring entrypoint (self): {}", addr);
                                         }
                                         
-                                        // Add peers from response
+                                        // Add peers from response (only check IP, not port)
                                         for peer in response_msg.peer_list.list {
-                                            if peer.addr.port() != GOSSIP_SERVER_PORT {
+                                            if peer.addr.ip() != local_ip {
                                                 peer_list_guard.add_with_version(peer.addr, false, peer.version.clone());
                                             } else {
                                                 info!("Ignoring self peer from bootstrap: {}", peer.addr);
@@ -507,26 +501,26 @@ pub async fn bootstrap_from_entrypoint_udp(
                                         }
                                     }
                                     Err(e) => {
-                                        panic!("Bootstrap failed: invalid response from {}: {}", addr, e);
+                                        return Err(anyhow!("Bootstrap failed: invalid response from {}: {}", addr, e));
                                     }
                                 }
                             } else {
-                                panic!("Bootstrap failed: response from wrong address {} (expected {})", response_addr, addr);
+                                return Err(anyhow!("Bootstrap failed: response from wrong address {} (expected {})", response_addr, addr));
                             }
                         }
                         Ok(Err(e)) => {
-                            panic!("Bootstrap failed: receive error from {}: {}", addr, e);
+                            return Err(anyhow!("Bootstrap failed: receive error from {}: {}", addr, e));
                         }
                         Err(_) => {
-                            panic!("Bootstrap failed: timeout waiting for response from {}", addr);
+                            return Err(anyhow!("Bootstrap failed: timeout waiting for response from {}", addr));
                         }
                     }
                 }
                 Ok(Err(e)) => {
-                    panic!("Bootstrap failed: send error to {}: {}", addr, e);
+                    return Err(anyhow!("Bootstrap failed: send error to {}: {}", addr, e));
                 }
                 Err(_) => {
-                    panic!("Bootstrap failed: timeout sending to {}", addr);
+                    return Err(anyhow!("Bootstrap failed: timeout sending to {}", addr));
                 }
             }
         }

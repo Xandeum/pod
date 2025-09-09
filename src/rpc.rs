@@ -54,12 +54,19 @@ async fn rpc_handler(state: State<AppState>, Json(req): Json<RpcRequest>) -> Jso
     match req.method.as_str() {
         "get-version" => {
             let version = VersionInfo { version: env!("CARGO_PKG_VERSION") };
-            Json(serde_json::to_value(RpcResponse {
+            match serde_json::to_value(RpcResponse {
                 jsonrpc: "2.0",
                 result: Some(version),
                 error: None,
                 id,
-            }).unwrap())
+            }) {
+                Ok(json) => Json(json),
+                Err(_) => Json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32603, "message": "Internal error"},
+                    "id": id
+                }))
+            }
         }
         "get-stats" => {
             let metadata = state.meta.lock().await;
@@ -75,12 +82,19 @@ async fn rpc_handler(state: State<AppState>, Json(req): Json<RpcRequest>) -> Jso
                 stats: stats.clone(),
                 file_size,
             };
-            Json(serde_json::to_value(RpcResponse {
+            match serde_json::to_value(RpcResponse {
                 jsonrpc: "2.0",
                 result: Some(combined),
                 error: None,
                 id,
-            }).unwrap())
+            }) {
+                Ok(json) => Json(json),
+                Err(_) => Json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32603, "message": "Internal error"},
+                    "id": id
+                }))
+            }
         }
         "get-pods" => {
             let peer_list = state.peer_list.read().await;
@@ -102,23 +116,29 @@ async fn rpc_handler(state: State<AppState>, Json(req): Json<RpcRequest>) -> Jso
                 pods,
             };
             
-            Json(serde_json::to_value(RpcResponse {
+            match serde_json::to_value(RpcResponse {
                 jsonrpc: "2.0",
                 result: Some(pods_response),
                 error: None,
                 id,
-            }).unwrap())
+            }) {
+                Ok(json) => Json(json),
+                Err(_) => Json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32603, "message": "Internal error"},
+                    "id": id
+                }))
+            }
         }
         _ => {
-            Json(serde_json::to_value(RpcResponse::<()> {
-                jsonrpc: "2.0",
-                result: None,
-                error: Some(RpcError {
-                    code: -32601,
-                    message: "Method not found".to_string(),
-                }),
-                id,
-            }).unwrap())
+            Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32601,
+                    "message": "Method not found"
+                },
+                "id": id
+            }))
         }
     }
 }

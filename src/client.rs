@@ -93,41 +93,41 @@ impl PersistentStreamManager {
                     info!("Initial handshake packet sent successfully");
                 }
 
-                // if let Some((_, receiver)) = &self.data_stream {
-                //     let packet = receive_packets(receiver.clone(), self.stats.clone()).await?;
-                //     info!("Received packet: {:?}", packet.meta);
+                if let Some((_, receiver)) = &self.data_stream {
+                    let packet = receive_packets(receiver.clone(), self.stats.clone()).await?;
+                    info!("Received packet: {:?}", packet.meta);
 
-                //     if packet.meta.as_ref().unwrap().op == AtlasOperation::PPoke as i32 {
-                //         info!("poke packet received : {:?}", packet);
-                //         let received_catalog: GlobalCatalogPage = deserialize(&packet.data)?;
-                //         info!("📖 RECEIVED CATALOG from Atlas: {} filesystems", received_catalog.filesystems.len());
+                    if packet.meta.as_ref().map_or(false, |meta| meta.op == AtlasOperation::PPoke as i32) {
+                        info!("poke packet received : {:?}", packet);
+                        let received_catalog: GlobalCatalogPage = deserialize(&packet.data)?;
+                        info!("📖 RECEIVED CATALOG from Atlas: {} filesystems", received_catalog.filesystems.len());
                         
-                //         for fs in &received_catalog.filesystems {
-                //             info!("  📁 Atlas FS ID: {} (Pod: {})", fs.fs_id, fs.home_pod_id);
-                //         }
+                        for fs in &received_catalog.filesystems {
+                            info!("  📁 Atlas FS ID: {} (Pod: {})", fs.fs_id, fs.home_pod_id);
+                        }
 
-                //         // 📝 WRITE CATALOG: Write the received catalog to pod's storage
-                //         info!("📝 WRITING CATALOG: Replacing pod's catalog with received data");
-                //         match storage_state.write_catalog(received_catalog.clone()).await {
-                //             Ok(()) => {
-                //                 info!("✅ CATALOG WRITTEN: Atlas catalog successfully written to pod storage");
+                        // 📝 WRITE CATALOG: Write the received catalog to pod's storage
+                        info!("📝 WRITING CATALOG: Replacing pod's catalog with received data");
+                        match storage_state.write_catalog(received_catalog.clone()).await {
+                            Ok(()) => {
+                                info!("✅ CATALOG WRITTEN: Atlas catalog successfully written to pod storage");
                                 
-                //                 // // Verify the write by reading it back
-                //                 // match storage_state.clone().read_catalog().await {
-                //                 //     Ok(written_catalog) => {
-                //                 //         info!("✅ CATALOG VERIFIED: {} filesystems now in pod storage", written_catalog.filesystems.len());
-                //                 //     }
-                //                 //     Err(e) => {
-                //                 //         error!("❌ CATALOG VERIFY FAILED: {}", e);
-                //                 //     }
-                //                 // }
-                //             }
-                //             Err(e) => {
-                //                 error!("❌ CATALOG WRITE ``: {}", e);
-                //             }
-                //         }
-                //     }
-                // }
+                                // Verify the write by reading it back
+                                // match storage_state.clone().read_catalog().await {
+                                //     Ok(written_catalog) => {
+                                //         info!("✅ CATALOG VERIFIED: {} filesystems now in pod storage", written_catalog.filesystems.len());
+                                //     }
+                                //     Err(e) => {
+                                //         error!("❌ CATALOG VERIFY FAILED: {}", e);
+                                //     }
+                                // }
+                            }
+                            Err(e) => {
+                                error!("❌ CATALOG WRITE ``: {}", e);
+                            }
+                        }
+                    }
+                }
 
         
                 
@@ -234,7 +234,7 @@ impl PersistentStreamManager {
                     let elapsed = start_time.elapsed();
                     info!("Received packet in {:?}: {:?}", elapsed, packet.meta);
                     
-                    if packet.meta.as_ref().unwrap().op == AtlasOperation::PHeartbeat as i32 {
+                    if packet.meta.as_ref().map_or(false, |meta| meta.op == AtlasOperation::PHeartbeat as i32) {
                         info!("Heartbeat response received successfully! RTT: {:?}", elapsed);
                         
                         // Update stats
@@ -244,8 +244,9 @@ impl PersistentStreamManager {
                         
                         Ok(())
                     } else {
-                        error!("Expected heartbeat response, got: {:?}", packet.meta.as_ref().unwrap().op);
-                        Err(anyhow!("Expected heartbeat response, got: {:?}", packet.meta.as_ref().unwrap().op))
+                        let op_code = packet.meta.as_ref().map(|m| m.op).unwrap_or(-1);
+                        error!("Expected heartbeat response, got: {:?}", op_code);
+                        Err(anyhow!("Expected heartbeat response, got: {:?}", op_code))
                     }
                 }
                 Ok(Err(e)) => {
@@ -275,7 +276,7 @@ impl PersistentStreamManager {
                     let elapsed = start_time.elapsed();
                     info!("Received server packet in {:?}: {:?}", elapsed, packet.meta);
                     
-                    if packet.meta.as_ref().unwrap().op == AtlasOperation::PHeartbeat as i32 {
+                    if packet.meta.as_ref().map_or(false, |meta| meta.op == AtlasOperation::PHeartbeat as i32) {
                         info!("Server heartbeat received! Sending response...");
                         
                         // Respond with heartbeat
@@ -292,8 +293,9 @@ impl PersistentStreamManager {
                             }
                         }
                     } else {
-                        error!("Expected heartbeat from server, got: {:?}", packet.meta.as_ref().unwrap().op);
-                        Err(anyhow!("Expected heartbeat from server, got: {:?}", packet.meta.as_ref().unwrap().op))
+                        let op_code = packet.meta.as_ref().map(|m| m.op).unwrap_or(-1);
+                        error!("Expected heartbeat from server, got: {:?}", op_code);
+                        Err(anyhow!("Expected heartbeat from server, got: {:?}", op_code))
                     }
                 }
                 Err(e) => {
@@ -311,7 +313,9 @@ impl PersistentStreamManager {
     pub async fn send_data_operation(&self, packet: Packet) -> Result<()> {
         let start_time = std::time::Instant::now();
         info!("Sending data operation: {:?}", packet.meta);
-        info!("   Operation: {:?}", packet.meta.as_ref().unwrap().op);
+        if let Some(meta) = packet.meta.as_ref() {
+            info!("   Operation: {:?}", meta.op);
+        }
         // info!("   Page: {}, Offset: {}, Length: {}", packet.meta.as_ref().unwrap().page_no, packet.meta.as_ref().unwrap().offset, packet.meta.as_ref().unwrap().length);
         
         if let Some((sender, _)) = &self.data_stream {
@@ -342,7 +346,9 @@ impl PersistentStreamManager {
                 Ok(packet) => {
                     let elapsed = start_time.elapsed();
                     info!("Data operation received in {:?}: {:?}", elapsed, packet.meta);
-                    info!("   Operation: {:?}", packet.meta.as_ref().unwrap().op);
+                    if let Some(meta) = packet.meta.as_ref() {
+                        info!("   Operation: {:?}", meta.op);
+                    }
                     // info!("   Page: {}, Offset: {}, Length: {}", packet.meta.as_ref().unwrap().page_no, packet.meta.as_ref().unwrap().offset, packet.meta.as_ref().unwrap().length);
                     info!("   Data size: {} bytes", packet.data.len());
                     Ok(packet)
@@ -362,7 +368,9 @@ impl PersistentStreamManager {
     pub async fn handle_data_operation(&self, storage_state: &StorageState, packet: Packet) -> Result<()> {
         let start_time = std::time::Instant::now();
 
-        let op = AtlasOperation::try_from(packet.meta.as_ref().unwrap().op)?;
+        let op = packet.meta.as_ref()
+            .ok_or_else(|| anyhow!("Packet missing metadata"))
+            .and_then(|meta| AtlasOperation::try_from(meta.op))?;
         info!("Handling data operation: {:?}", op);
         let storage_state_clone = storage_state.clone();
         
@@ -689,7 +697,9 @@ async fn receive_packets(
                     .map_err(|e| anyhow!("Failed to deserialize packet : {:?}", e))?;
 
                 if packets_chunks.is_empty() {
-                    expected_total_chunks = packet.meta.as_ref().unwrap().total_chunks;
+                    expected_total_chunks = packet.meta.as_ref()
+                        .map(|meta| meta.total_chunks)
+                        .unwrap_or(1);
                     info!("First chunk received, expecting {} total chunks", expected_total_chunks);
                 }
                 info!("Received packet chunk {}/{}: {:?}", 
@@ -804,9 +814,9 @@ pub fn configure_client() -> Result<ClientConfig> {
 
     let mut transport_config = TransportConfig::default();
     transport_config
-        .max_idle_timeout(Some(Duration::from_secs(24 * 60 * 60).try_into().unwrap()))
-        .stream_receive_window(VarInt::from_u64(1_000_000).unwrap()) 
-        .max_concurrent_bidi_streams(VarInt::from_u64(100).unwrap());
+        .max_idle_timeout(Some(Duration::from_secs(24 * 60 * 60).try_into().map_err(|e| anyhow!("Invalid timeout: {}", e))?))
+        .stream_receive_window(VarInt::from_u64(1_000_000).map_err(|e| anyhow!("Invalid stream window: {}", e))?) 
+        .max_concurrent_bidi_streams(VarInt::from_u64(100).map_err(|e| anyhow!("Invalid stream count: {}", e))?);
 
     client_config.transport_config(Arc::new(transport_config));
     Ok(client_config)
@@ -827,9 +837,9 @@ pub fn configure_gossip_client() -> Result<ClientConfig> {
 
     let mut transport_config = TransportConfig::default();
     transport_config
-        .max_idle_timeout(Some(Duration::from_secs(60).try_into().unwrap()))
-        .stream_receive_window(VarInt::from_u64(1_000_000).unwrap())
-        .max_concurrent_bidi_streams(VarInt::from_u64(10).unwrap());
+        .max_idle_timeout(Some(Duration::from_secs(60).try_into().map_err(|e| anyhow!("Invalid timeout: {}", e))?))
+        .stream_receive_window(VarInt::from_u64(1_000_000).map_err(|e| anyhow!("Invalid stream window: {}", e))?)
+        .max_concurrent_bidi_streams(VarInt::from_u64(10).map_err(|e| anyhow!("Invalid stream count: {}", e))?);
 
     client_config.transport_config(Arc::new(transport_config));
     Ok(client_config)
@@ -850,9 +860,9 @@ pub fn configure_server() -> Result<ServerConfig> {
 
     let mut transport_config = TransportConfig::default();
     transport_config
-        .max_idle_timeout(Some(Duration::from_secs(60).try_into().unwrap()))
-        .stream_receive_window(VarInt::from_u64(1_000_000).unwrap())
-        .max_concurrent_bidi_streams(VarInt::from_u64(10).unwrap());
+        .max_idle_timeout(Some(Duration::from_secs(60).try_into().map_err(|e| anyhow!("Invalid timeout: {}", e))?))
+        .stream_receive_window(VarInt::from_u64(1_000_000).map_err(|e| anyhow!("Invalid stream window: {}", e))?)
+        .max_concurrent_bidi_streams(VarInt::from_u64(10).map_err(|e| anyhow!("Invalid stream count: {}", e))?);
 
     server_config.transport_config(Arc::new(transport_config));
     Ok(server_config)

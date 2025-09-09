@@ -630,7 +630,8 @@ impl StorageState {
         sender: Arc<Mutex<SendStream>>,
         stats: Arc<Mutex<Stats>>,
     ) -> Result<()> {
-        let payload: CachePayload = deserialize(&packet.data).unwrap();
+        let payload: CachePayload = deserialize(&packet.data)
+            .map_err(|e| anyhow!("Failed to deserialize cache payload: {}", e))?;
 
         let pages = payload.pages;
         let catalog = self.clone().read_catalog().await?;
@@ -1546,7 +1547,8 @@ impl StorageState {
     ) -> Result<()> {
         let catalogue = self.read_catalog().await?;
 
-        let bytes = serialize(&catalogue).unwrap();
+        let bytes = serialize(&catalogue)
+            .map_err(|e| anyhow!("Failed to serialize catalog: {}", e))?;
 
         let pkt = Packet::new(
             0,
