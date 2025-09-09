@@ -9,6 +9,10 @@ on:
 jobs:
   publish-deb-package:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      repository-projects: write
     steps:
       - name: Checkout pod repository
         uses: actions/checkout@v4
