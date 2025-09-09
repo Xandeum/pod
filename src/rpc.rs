@@ -58,7 +58,7 @@ async fn rpc_handler(state: State<AppState>, Json(req): Json<RpcRequest>) -> Jso
                 jsonrpc: "2.0",
                 result: Some(version),
                 error: None,
-                id,
+                id: id.clone(),
             }) {
                 Ok(json) => Json(json),
                 Err(_) => Json(serde_json::json!({
@@ -86,7 +86,7 @@ async fn rpc_handler(state: State<AppState>, Json(req): Json<RpcRequest>) -> Jso
                 jsonrpc: "2.0",
                 result: Some(combined),
                 error: None,
-                id,
+                id: id.clone(),
             }) {
                 Ok(json) => Json(json),
                 Err(_) => Json(serde_json::json!({
@@ -120,7 +120,7 @@ async fn rpc_handler(state: State<AppState>, Json(req): Json<RpcRequest>) -> Jso
                 jsonrpc: "2.0",
                 result: Some(pods_response),
                 error: None,
-                id,
+                id: id.clone(),
             }) {
                 Ok(json) => Json(json),
                 Err(_) => Json(serde_json::json!({

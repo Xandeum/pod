@@ -370,7 +370,7 @@ impl PersistentStreamManager {
 
         let op = packet.meta.as_ref()
             .ok_or_else(|| anyhow!("Packet missing metadata"))
-            .and_then(|meta| AtlasOperation::try_from(meta.op))?;
+            .and_then(|meta| AtlasOperation::try_from(meta.op).map_err(|e| anyhow!("Invalid operation: {:?}", e)))?;
         info!("Handling data operation: {:?}", op);
         let storage_state_clone = storage_state.clone();
         

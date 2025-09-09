@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use bincode::{deserialize, serialize};
 use chrono::Utc;
 use log::{debug, error, info, trace, warn};

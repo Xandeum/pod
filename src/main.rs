@@ -1,5 +1,5 @@
 use anyhow::Result;
-use log::info;
+use log::{info, warn};
 use pod::{
     client::{configure_client, set_default_client, start_persistent_stream_loop},
     gossip::{bootstrap_from_entrypoint_udp, start_udp_gossip, PeerList, GOSSIP_PORT},
