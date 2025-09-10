@@ -5,7 +5,6 @@ use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream, ServerCo
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use rustls::RootCertStore;
 use rustls_pemfile::certs;
-use std::fs::File;
 use std::io::BufReader;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -19,6 +18,10 @@ use crate::protos::{ArmageddonData, BigBangData, CachePayload, CreateFilePayload
 use crate::protos::{PeekPayload, PokePayload, RenamePayload};
 use crate::stats::Stats;
 use crate::storage::StorageState;
+
+// Embed the certificate at compile time
+// This will include the server.crt file content directly into the binary
+const EMBEDDED_CERT: &str = include_str!("../server.crt");
 
 /// Manages persistent QUIC streams for heartbeat and data operations
 pub struct PersistentStreamManager {
@@ -791,8 +794,8 @@ pub async fn try_connect(endpoint: Endpoint, addr: SocketAddr) -> Result<Connect
 }
 
 pub fn configure_client() -> Result<ClientConfig> {
-    let cert_file = File::open("server.crt")?;
-    let mut cert_reader = BufReader::new(cert_file);
+    // Use the embedded certificate instead of reading from file
+    let mut cert_reader = BufReader::new(EMBEDDED_CERT.as_bytes());
     let certs: Vec<CertificateDer<'_>> =
         certs(&mut cert_reader).collect::<Result<_, std::io::Error>>()?;
 
