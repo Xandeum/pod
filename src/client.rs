@@ -19,9 +19,37 @@ use crate::protos::{PeekPayload, PokePayload, RenamePayload};
 use crate::stats::Stats;
 use crate::storage::StorageState;
 
-// Embed the certificate at compile time
-// This will include the server.crt file content directly into the binary
-const EMBEDDED_CERT: &str = include_str!("../server.crt");
+// Embed the certificate directly in the source code
+// This certificate is hardcoded into the binary
+const EMBEDDED_CERT: &str = r#"-----BEGIN CERTIFICATE-----
+MIIFCTCCAvGgAwIBAgIUeknkfsIcfnj4c5RRljLbhxD8tEEwDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI1MDQyODA2NDc1NloXDTI2MDQy
+ODA2NDc1NlowFDESMBAGA1UEAwwJbG9jYWxob3N0MIICIjANBgkqhkiG9w0BAQEF
+AAOCAg8AMIICCgKCAgEA00AJtTkq1uFtLqdJ1CS2kwCVhXu3uVpJAOa1KMtCnoYp
+7lPunVUIGIVdab/SwG/IhcJ5QO882wRGbIOBfNHVZ6j2pZxTRbSmvgmaN/DEmqk5
+GHFBWWw0nl0livnfb+bBQH+jhi+P0GvnvMVGKKsv/J9ZKnBxgMKXwFAwMbRlhYUv
+ScWMDATStBZLhjJHJITAmq1I28t8ARfFB99VX4UEHLHX7zci4zNb2rdFDTkPKTqQ
+6m+EUoXtCv2m4pEwXDmotnnZ/HJLfZC4MwkESPzfC8IbTFCOIk+fQuxQ9mxS08ml
+GYjqhASIUAWFG19iO4T9YG0hGHWpWwr1jGX8yBHd8iZm+mnr/xZ/ZRd25Iv2GqyT
+PndpPalo1k1rXqbBKoL2Z2v9Zse4Ic4N2FW/Bt5C0AqPu7k6sKlO53G62TEHDfL1
+LiTbM1+Eg/w/q+0nJB0g6ARue9jOUB3/O/GoBUuW7r0Ofu7b1ydsXchIRS+QfRJz
+tiriPTfWSBX2ITc7e6TzQCS3IypGIY39tkUau2Gld1Dtct3P/YRo6lpyPwczzYGX
++0DeeRIDhV01ZU7ClrE4vdMpN67HEsXBDPGEuqQdyKVOdonFfdX2i/qxbb5o44im
+9aMhxscOSZiwZzbqQvYGH5FNBDCEuhEPJYK/g3fS+3OrCgIVvAiu8Aq6UH+1bl0C
+AwEAAaNTMFEwHQYDVR0OBBYEFNP5MuISCrK+C6ZRwOptgX5/b6QuMB8GA1UdIwQY
+MBaAFNP5MuISCrK+C6ZRwOptgX5/b6QuMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZI
+hvcNAQELBQADggIBAHak+w+Kt9vUXN4OcreNIe9Jr5kBgNPSfm8RhJVSUf6GoHKo
+33sw6U/uEhbgl5cvhUE+LOO2XBTPjrXmD7h/4XT6+pzHO9Bio05HySfj6XPlb6XM
+DnW3BYYly3pVUBuJ2UQ4GlV3j5qhvNG0LkeJzmM4/2MylnEBctEHaBP/ZAsjpzkJ
+GM/Ljw48Hf8VPUn9cYDQmwzPRsPZ6znctCLZfRAgub2I0ban4/quk+6ruokiu1jg
+5uOsX3EAK+WnNcxcy+VKOIsWJy3AoKWSQsMAChb7++ysHJhLhrwUzqZLGoJNhI+V
+9B0WH6WMTFCEVqeHa7kR5HI+mzSaUbu2h9ZnGabJB3C9XcG/zC7jfKv4IMnk5La9
+gKnJKnmdCNkyy/hcbS5iEO8OXIrHVrR6RBS7D3ZnTO3rIfpeS42jKWi+Lm1R8IIk
+RwZ5jGJIpqd7c44J1zBbr4Lui+PF7eaO4UpOkB9C/Fn5TtNr+4nXLdrrN2qLcEHG
+NopHegI0zKJNOyhXK1BhjIbrTxjTvHhVwG6R4LdTpkMQ3+p7JIH5kqQ6Lwyo8nQp
+Pzz0cpyE7F/9EB3DSQobZbE2K5ViNSaDYF2MAGuncViJvBT0AI3rIthMqZRvd9Kj
+VF7MbCUrBJ1QofGVfPjN3ZOCSisSxioQuUaR50LJx7bhf3aqMNcAt7tMVT5o
+-----END CERTIFICATE-----"#;
 
 /// Manages persistent QUIC streams for heartbeat and data operations
 pub struct PersistentStreamManager {
