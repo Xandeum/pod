@@ -94,7 +94,7 @@ pub async fn start_server(
         .merge(rpc::rpc_router())
         .with_state(app_state);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3500));
+    let addr = SocketAddr::from(([0, 0, 0, 0], 80));
     log::info!("Starting web server on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app.into_make_service()).await?;
