@@ -25,6 +25,7 @@ const MAX_GOSSIP_PEERS: usize = 3;
 const MAX_INACTIVITY_PERIOD_IN_SECS: u64 = 60 * 60;
 pub const GOSSIP_PORT: u16 = 9000;
 pub const GOSSIP_SERVER_PORT: u16 = 9001;
+const DEFAULT_BOOTSTRAP: &str = "173.212.207.32:9001"; // Default bootstrap node
 
 // UDP-specific constants
 const MAX_UDP_PACKET_SIZE: usize = 1400; // Stay under typical MTU
@@ -361,6 +362,27 @@ impl UdpGossipManager {
                 .collect();
             
             (selected_peers, all_peers)
+        };
+
+        let peers_to_contact = if peers_to_contact.is_empty() {
+            // If no peers, try to contact the default bootstrap node
+            match DEFAULT_BOOTSTRAP.parse::<SocketAddr>() {
+                Ok(bootstrap_addr) => {
+                    if !self.is_self(bootstrap_addr) {
+                        info!("No peers found, using default bootstrap node: {}", bootstrap_addr);
+                        vec![bootstrap_addr]
+                    } else {
+                        info!("Default bootstrap node is self, no peers to contact");
+                        vec![]
+                    }
+                }
+                Err(e) => {
+                    error!("Invalid default bootstrap address '{}': {}", DEFAULT_BOOTSTRAP, e);
+                    vec![]
+                }
+            }
+        } else {
+            peers_to_contact
         };
 
         if peers_to_contact.is_empty() {
