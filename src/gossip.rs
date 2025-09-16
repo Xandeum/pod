@@ -84,9 +84,11 @@ impl PeerList {
     }
 
     /// Adds a peer to the list with version information.
+    /// If a peer with the same IP already exists, it replaces the old one with the new port.
     pub fn add_with_version(&mut self, peer_addr: SocketAddr, update_last_seen: bool, version: Option<String>) {
         let now = Utc::now().timestamp() as u64;
         
+        // First check for exact address match
         if let Some(existing_peer) = self.list.iter_mut().find(|p| p.addr == peer_addr) {
             if update_last_seen {
                 existing_peer.last_seen = now;
@@ -94,26 +96,31 @@ impl PeerList {
             if version.is_some() {
                 existing_peer.version = version;
             }
+            return;
+        }
+        
+        // Check if we already have this IP with a different port
+        if let Some(existing_peer_index) = self.list.iter().position(|p| p.addr.ip() == peer_addr.ip()) {
+            let old_addr = self.list[existing_peer_index].addr;
+            info!("Replacing peer {} with {} (same IP, different port)", old_addr, peer_addr);
+            
+            // Replace the existing peer with the new one
+            self.list[existing_peer_index] = Peer {
+                addr: peer_addr,
+                last_seen: now,
+                version: version.clone(),
+            };
         } else {
-            // Check if we already have this IP with a different port
-            let same_ip_peers: Vec<SocketAddr> = self.list.iter()
-                .filter(|p| p.addr.ip() == peer_addr.ip())
-                .map(|p| p.addr)
-                .collect();
-            
-            if !same_ip_peers.is_empty() {
-                info!("Adding peer {} (same IP as existing peers: {:?})", peer_addr, same_ip_peers);
-            }
-            
+            // No existing peer with this IP, add new one
             self.list.push(Peer {
                 addr: peer_addr,
                 last_seen: now,
                 version: version.clone(),
             });
-            
-            let peer_addrs: Vec<SocketAddr> = self.list.iter().map(|p| p.addr).collect();
-            info!("Added peer {}: total {} peers {:?}", peer_addr, self.list.len(), peer_addrs);
         }
+        
+        let peer_addrs: Vec<SocketAddr> = self.list.iter().map(|p| p.addr).collect();
+        info!("Updated peer list with {}: total {} peers {:?}", peer_addr, self.list.len(), peer_addrs);
     }
 }
 
@@ -125,7 +132,7 @@ pub struct UdpGossipManager {
     local_ip: std::net::IpAddr,
     local_port: u16,
     message_counter: AtomicU64,
-    seen_messages: Arc<Mutex<HashMap<u64, u64>>>, // message_id -> timestamp
+    seen_messages: Arc<Mutex<HashMap<String, u64>>>, // "sender_addr:message_id" -> timestamp
 }
 
 impl UdpGossipManager {
@@ -168,17 +175,20 @@ impl UdpGossipManager {
     }
 
     /// Checks if we've already seen this message (for deduplication)
-    async fn is_duplicate_message(&self, message_id: u64) -> bool {
+    async fn is_duplicate_message(&self, sender_addr: SocketAddr, message_id: u64) -> bool {
         let mut seen = self.seen_messages.lock().await;
         let now = Utc::now().timestamp() as u64;
         
         // Clean up old entries (older than 5 minutes)
         seen.retain(|_, timestamp| now - *timestamp < 300);
         
-        if seen.contains_key(&message_id) {
+        // Create composite key: sender_addr:message_id
+        let composite_key = format!("{}:{}", sender_addr, message_id);
+        
+        if seen.contains_key(&composite_key) {
             true
         } else {
-            seen.insert(message_id, now);
+            seen.insert(composite_key, now);
             false
         }
     }
@@ -237,7 +247,7 @@ impl UdpGossipManager {
                 match deserialize::<GossipMessage>(&buffer[..bytes_received]) {
                     Ok(gossip_msg) => {
                         // Check for duplicate messages
-                        if self.is_duplicate_message(gossip_msg.message_id).await {
+                        if self.is_duplicate_message(sender_addr, gossip_msg.message_id).await {
                             return Ok(());
                         }
 
@@ -455,6 +465,17 @@ pub async fn bootstrap_from_entrypoint_udp(
             let temp_socket = TokioUdpSocket::bind("0.0.0.0:0").await?;
             let local_ip = get_local_ip()?;
             
+            // Add entrypoint to peer list immediately (before attempting communication)
+            // This ensures it's available for future gossip cycles even if bootstrap fails
+            if addr.ip() != local_ip {
+                let mut peer_list_guard = peer_list.write().await;
+                peer_list_guard.add_with_version(addr, true, None); 
+                drop(peer_list_guard);
+                info!("Added entrypoint {} to peer list for future gossip cycles", addr);
+            } else {
+                info!("Skipping entrypoint (self): {}", addr);
+            }
+            
             let bootstrap_msg = GossipMessage {
                 peer_list: PeerList { list: Vec::new() },
                 sender_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -484,11 +505,9 @@ pub async fn bootstrap_from_entrypoint_udp(
                                         
                                         let mut peer_list_guard = peer_list.write().await;
                                         
-                                        // Add entrypoint (only check IP, not port)
+                                        // Update entrypoint with version info (it was already added earlier)
                                         if addr.ip() != local_ip {
                                             peer_list_guard.add_with_version(addr, true, Some(response_msg.sender_version.clone()));
-                                        } else {
-                                            info!("Ignoring entrypoint (self): {}", addr);
                                         }
                                         
                                         // Add peers from response (only check IP, not port)

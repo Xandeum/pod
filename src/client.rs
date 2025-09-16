@@ -723,7 +723,6 @@ async fn receive_packets(
 
         match recv.read_exact(&mut buffer).await {
             Ok(()) => {
-                info!("buffer : {:?}", buffer);
                 let packet: Packet = bincode::deserialize(&buffer)
                     .map_err(|e| anyhow!("Failed to deserialize packet : {:?}", e))?;
 
