@@ -3,10 +3,14 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use chrono::{DateTime, Utc};
+use anyhow::Result;
+use std::net::SocketAddr;
 
 use crate::stats::{AppState, CombinedStats};
 use crate::storage::FILE_PATH;
 use tokio::fs::OpenOptions;
+
+const RPC_PORT: u16 = 6000;
 
 #[derive(Deserialize)]
 struct RpcRequest {
@@ -143,7 +147,49 @@ async fn rpc_handler(state: State<AppState>, Json(req): Json<RpcRequest>) -> Jso
     }
 }
 
-pub fn rpc_router() -> Router<AppState> {
-    Router::new()
+pub async fn start_rpc_server(
+    meta: Arc<Mutex<crate::storage::Metadata>>, 
+    stats: Arc<Mutex<crate::stats::Stats>>,
+    peer_list: Arc<tokio::sync::RwLock<crate::gossip::PeerList>>,
+    rpc_ip: String
+) -> Result<()> {
+    let app_state = AppState { meta, stats, peer_list };
+
+    let app = Router::new()
         .route("/rpc", post(rpc_handler))
+        .with_state(app_state);
+
+    // Parse the IP address
+    let ip_addr: std::net::IpAddr = rpc_ip.parse()
+        .map_err(|e| anyhow::anyhow!("Invalid IP address '{}': {}", rpc_ip, e))?;
+    
+    let addr = SocketAddr::new(ip_addr, RPC_PORT);
+    
+    // Validate that we can actually bind to this IP address
+    match tokio::net::TcpListener::bind(addr).await {
+        Ok(test_listener) => {
+            drop(test_listener); // Close the test listener
+        }
+        Err(e) => {
+            return Err(anyhow::anyhow!(
+                "Cannot bind to IP address {} on port {}: {}. \
+                Make sure the IP address is available on this system.", 
+                rpc_ip, RPC_PORT, e
+            ));
+        }
+    }
+    
+    let visibility = if rpc_ip == "127.0.0.1" || rpc_ip == "localhost" {
+        "private"
+    } else if rpc_ip == "0.0.0.0" {
+        "public"
+    } else {
+        "custom"
+    };
+    
+    log::info!("Starting {} RPC server on {} ({}:{})", visibility, addr, rpc_ip, RPC_PORT);
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app.into_make_service()).await?;
+
+    Ok(())
 } 

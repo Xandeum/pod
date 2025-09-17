@@ -12,8 +12,9 @@ use crate::{
     stats::{update_system_stats, AppState, CombinedStats, Stats},
     storage::{Metadata, FILE_PATH},
     gossip::PeerList,
-    rpc,
 };
+
+const STATS_PORT: u16 = 80;
 
 #[derive(Serialize)]
 struct ApiResponse {
@@ -91,11 +92,10 @@ pub async fn start_server(
         .route("/", get(root))
         .route("/stats", get(get_stats))
         .route("/stats-page", get(get_stats_page))
-        .merge(rpc::rpc_router())
         .with_state(app_state);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 80));
-    log::info!("Starting web server on {}", addr);
+    let addr = SocketAddr::from(([127, 0, 0, 1], STATS_PORT));
+    log::info!("Starting private stats server on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app.into_make_service()).await?;
 

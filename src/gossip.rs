@@ -23,14 +23,15 @@ const MAX_CONNECTION_RETRIES: u8 = 3;
 const GOSSIP_INTERVAL_SECS: u64 = 120;
 const MAX_GOSSIP_PEERS: usize = 3;
 const MAX_INACTIVITY_PERIOD_IN_SECS: u64 = 60 * 60;
-pub const GOSSIP_PORT: u16 = 9000;
 pub const GOSSIP_SERVER_PORT: u16 = 9001;
-const DEFAULT_BOOTSTRAP: &str = "173.212.207.32:9001"; // Default bootstrap node
+const DEFAULT_BOOTSTRAP: &str = "161.97.97.41:9001"; // Default bootstrap node
 
 // UDP-specific constants
 const MAX_UDP_PACKET_SIZE: usize = 1400; // Stay under typical MTU
 const UDP_TIMEOUT_SECS: u64 = 5;
 const UDP_RETRY_ATTEMPTS: u32 = 3;
+
+const MAX_PEERS_PER_GOSSIP: usize = 40; 
 
 /// Get the local IP address by creating a test connection
 fn get_local_ip() -> Result<std::net::IpAddr> {
@@ -316,14 +317,24 @@ impl UdpGossipManager {
             let list_guard = self.peer_list.read().await;
             
             // Filter out self from the peer list we're sending
-            let non_self_peers: Vec<Peer> = list_guard.list.iter()
+            let mut non_self_peers: Vec<Peer> = list_guard.list.iter()
                 .filter(|p| !self.is_self(p.addr))
                 .cloned()
                 .collect();
             
+            // Randomly select a subset of peers to avoid large messages
+            use rand::seq::SliceRandom;
+            let mut rng = rand::thread_rng();
+            
+            if non_self_peers.len() > MAX_PEERS_PER_GOSSIP {
+                non_self_peers.shuffle(&mut rng);
+                non_self_peers.truncate(MAX_PEERS_PER_GOSSIP);
+            }
+            
             let peer_addrs: Vec<SocketAddr> = non_self_peers.iter().map(|p| p.addr).collect();
             
-            info!("GOSSIP-OUT (RESPONSE) to {}: {} peers {:?}", recipient, peer_addrs.len(), peer_addrs);
+            info!("GOSSIP-OUT (RESPONSE) to {}: {} peers (selected from {} total) {:?}", 
+                  recipient, peer_addrs.len(), list_guard.list.len() - 1, peer_addrs);
             
             GossipMessage {
                 peer_list: PeerList {
@@ -393,10 +404,19 @@ impl UdpGossipManager {
             let list_guard = self.peer_list.read().await;
             
             // Filter out self from the peer list we're sending
-            let non_self_peers: Vec<Peer> = list_guard.list.iter()
+            let mut non_self_peers: Vec<Peer> = list_guard.list.iter()
                 .filter(|p| !self.is_self(p.addr))
                 .cloned()
                 .collect();
+            
+            // Randomly select a subset of peers to avoid large messages
+            use rand::seq::SliceRandom;
+            let mut rng = rand::thread_rng();
+            
+            if non_self_peers.len() > MAX_PEERS_PER_GOSSIP {
+                non_self_peers.shuffle(&mut rng);
+                non_self_peers.truncate(MAX_PEERS_PER_GOSSIP);
+            }
             
             GossipMessage {
                 peer_list: PeerList {
@@ -501,7 +521,7 @@ pub async fn bootstrap_from_entrypoint_udp(
             let bootstrap_msg = GossipMessage {
                 peer_list: PeerList { list: Vec::new() },
                 sender_version: env!("CARGO_PKG_VERSION").to_string(),
-                message_id: 0,
+                message_id: 99999978545,
                 timestamp: Utc::now().timestamp() as u64,
                 message_type: MessageType::Request,
             };
