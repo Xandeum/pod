@@ -71,6 +71,7 @@ jobs:
         repository: Xandeum/test-doc
         path: doc-repo
         token: ${{ secrets.PAT }}
+        ref: master
     
     - name: Deploy documentation to test-doc repository
       run: |
@@ -100,5 +101,5 @@ jobs:
         git commit --allow-empty -m "docs: Deploy Pod documentation v${{ steps.version.outputs.VERSION }}"
         
         # Push changes
-        echo "--- Pushing documentation changes to main branch ---"
-        git push origin main 
+        echo "--- Pushing documentation changes to master branch ---"
+        git push origin master
