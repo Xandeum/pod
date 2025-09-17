@@ -67,11 +67,27 @@ jobs:
     
     - name: Checkout Test Documentation Repository
       uses: actions/checkout@v4
+      continue-on-error: true
+      id: checkout
       with:
         repository: Xandeum/test-doc
         path: doc-repo
         token: ${{ secrets.PAT }}
         ref: master
+    
+    - name: Initialize empty repository
+      if: steps.checkout.outcome == 'failure'
+      run: |
+        echo "Repository appears to be empty, initializing..."
+        rm -rf doc-repo
+        git clone https://x-access-token:${{ secrets.PAT }}@github.com/Xandeum/test-doc.git doc-repo
+        cd doc-repo
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        echo "# Xandeum Pod Documentation" > README.md
+        git add README.md
+        git commit -m "Initial commit - prepare for documentation deployment"
+        git push origin HEAD:master
     
     - name: Deploy documentation to test-doc repository
       run: |
