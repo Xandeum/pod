@@ -87,7 +87,8 @@ jobs:
         echo "# Xandeum Pod Documentation" > README.md
         git add README.md
         git commit -m "Initial commit - prepare for documentation deployment"
-        git push origin HEAD:master
+        git branch -M master
+        git push origin master
     
     - name: Deploy documentation to test-doc repository
       run: |
@@ -105,6 +106,13 @@ jobs:
         # Configure git
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
+        
+        # Ensure we're on the right branch
+        CURRENT_BRANCH=$(git branch --show-current)
+        if [ "$CURRENT_BRANCH" != "master" ]; then
+          echo "Current branch is $CURRENT_BRANCH, switching to master..."
+          git checkout -B master
+        fi
         
         # Add all changes
         git add -A .
