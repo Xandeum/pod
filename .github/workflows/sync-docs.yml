@@ -1,0 +1,92 @@
+name: Sync Documentation to Public Repo
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on version tags like v0.4.1, v0.4.2, etc.
+  workflow_dispatch:  # Allow manual triggering
+    inputs:
+      version:
+        description: 'Version to sync (leave empty for auto-detect)'
+        required: false
+        type: string
+
+jobs:
+  sync-docs:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout private pod repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Extract version
+      id: version
+      run: |
+        if [[ "${{ github.event.inputs.version }}" != "" ]]; then
+          VERSION="${{ github.event.inputs.version }}"
+        elif [[ $GITHUB_REF == refs/tags/v* ]]; then
+          VERSION=${GITHUB_REF#refs/tags/v}
+        else
+          VERSION=$(grep '^version = ' Cargo.toml | cut -d'"' -f2)
+        fi
+        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+        echo "Detected version: $VERSION"
+
+    - name: Checkout public apt repository
+      uses: actions/checkout@v4
+      with:
+        repository: Xandeum/pod-apt-package
+        path: apt-repo
+        token: ${{ secrets.PAT }}
+
+    - name: Sync documentation
+      run: |
+        VERSION="${{ steps.version.outputs.VERSION }}"
+        APT_REPO_PATH="apt-repo"
+        
+        echo "🔄 Syncing documentation to public apt package repo..."
+        echo "📁 Target repo: $APT_REPO_PATH (Xandeum/pod-apt-package)"
+        echo "🏷️  Version: $VERSION"
+        
+        # Create docs directory in apt repo if it doesn't exist
+        mkdir -p "$APT_REPO_PATH/docs"
+        
+        # Copy documentation files
+        echo "📋 Copying documentation files..."
+        cp -r docs/* "$APT_REPO_PATH/docs/"
+        cp mkdocs.yml "$APT_REPO_PATH/"
+        cp -r .github "$APT_REPO_PATH/" 2>/dev/null || true
+        
+        # Update version in the copied files
+        echo "🔄 Updating version references to $VERSION..."
+        cd "$APT_REPO_PATH"
+        
+        # Update mkdocs.yml
+        sed -i "s/site_name: Xandeum Pod Documentation.*/site_name: Xandeum Pod Documentation v$VERSION/" mkdocs.yml
+        
+        # Update version references in docs
+        find docs/ -name "*.md" -exec sed -i "s/pod [0-9]\+\.[0-9]\+\.[0-9]\+/pod $VERSION/g" {} \;
+        find docs/ -name "*.md" -exec sed -i "s/Pod v[0-9]\+\.[0-9]\+\.[0-9]\+/Pod v$VERSION/g" {} \;
+        
+        # Add/update version badge to homepage
+        if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            if ! grep -q "!!! info \"Version\"" docs/index.md; then
+                sed -i '/^# Xandeum Pod Documentation/a\\n!!! info "Version"\n    This documentation is for **Xandeum Pod v'$VERSION'**\n    Released: '$(date +"%B %d, %Y") docs/index.md
+            else
+                # Update existing version info
+                sed -i "s/Xandeum Pod v[0-9]\+\.[0-9]\+\.[0-9]\+/Xandeum Pod v$VERSION/g" docs/index.md
+                sed -i "s/Released: .*/Released: $(date +"%B %d, %Y")/g" docs/index.md
+            fi
+        fi
+
+    - name: Commit and push to public repo
+      run: |
+        cd apt-repo
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        
+        git add .
+        git commit -m "docs: Update documentation for v${{ steps.version.outputs.VERSION }}" || exit 0
+        git tag "docs-v${{ steps.version.outputs.VERSION }}" || true
+        git push origin main --tags 
