@@ -15,9 +15,9 @@ use tokio::{
 };
 
 use crate::client::send_packets;
-use crate::packet::{AtlasOperation, Meta, Packet, MAX_DATA_IN_PACKET};
+use crate::packet::{AtlasOperation, Meta, Packet};
 use crate::protos::{
-    ArmageddonData, BigBangData, CachePayload, CreateFilePayload, DirectoryEntry,
+    ArmageddonData, BigBangData, CachePayload, CreateFilePayload,
     DirectoryEntryPage, FileSystemRecord, GlobalCatalogPage, Inode, MkDirPayload, MovePayload,
     PeekPayload, PodMapping, PodMappingsPage, PokePayload, RenamePayload, RmDirPayload,
     RmFilePayload, XentriesPage, XentryMapping,
