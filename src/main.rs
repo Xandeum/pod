@@ -20,7 +20,7 @@ use tokio::{
 const ATLAS_IP: &str = "95.217.229.171:5000"; //Devnet
 // const ATLAS_IP: &str = "65.108.233.175:5000"; // trynet
 // const ATLAS_IP: &str = "127.0.0.1:5000";
-const DEFAULT_BOOTSTRAP: &str = "161.97.97.41:9001"; // Default bootstrap node
+const DEFAULT_BOOTSTRAP: &str = "173.212.207.32:9001"; // Default bootstrap node
 const QUIC_PORT: u16 = 5000;
 
 /// Xandeum Pod - High-performance blockchain node implementation
@@ -32,13 +32,13 @@ const QUIC_PORT: u16 = 5000;
 peer-to-peer communication via gossip protocol, and real-time statistics monitoring.
 
 PORTS:
-    6000    RPC API (configurable IP binding)
-    80      Stats dashboard (localhost only)  
-    9001    Gossip protocol (peer communication)
-    5000    Atlas connection (outbound)
+    6000    RPC API (HTTP/TCP, configurable IP binding)
+    80      Stats dashboard (HTTP/TCP, localhost only)  
+    9001    Gossip protocol (UDP, public, peer communication)
+    5000    Atlas connection (QUIC/UDP, public, outbound)
 
 DOCUMENTATION:
-    For complete documentation, visit /usr/share/doc/pod/ after installation")]
+    For complete documentation, visit https://xandeum.github.io/pod-docs/ after installation")]
 struct Args {
     /// Set RPC server IP binding [default: 127.0.0.1 for private]
     /// 
