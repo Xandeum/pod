@@ -1,10 +1,12 @@
 use anyhow::{anyhow, Error, Result};
 use bincode::deserialize;
+use chrono;
 use log::{error, info, warn};
 use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream, ServerConfig, TransportConfig, VarInt};
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use rustls::RootCertStore;
 use rustls_pemfile::certs;
+use solana_sdk::signature::{Keypair, Signer};
 use std::io::BufReader;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -13,6 +15,7 @@ use tokio::sync::{broadcast, Mutex};
 use rustls::ServerConfig as RustlsServerConfig;
 
 use crate::cert::AcceptAllVerifier;
+use crate::keypair::load_keypair_from_file;
 use crate::packet::{reassemble_packets, split_packet, AtlasOperation, Packet, MAX_PACKET_SIZE};
 use crate::protos::{ArmageddonData, BigBangData, CachePayload, CreateFilePayload, GlobalCatalogPage, MkDirPayload, RmDirPayload};
 use crate::protos::{PeekPayload, PokePayload, RenamePayload};
@@ -59,6 +62,7 @@ pub struct PersistentStreamManager {
     endpoint: Endpoint,
     addr: SocketAddr,
     stats: Arc<Mutex<Stats>>,
+    keypair: Option<Keypair>,
 }
 
 impl PersistentStreamManager {
@@ -70,6 +74,42 @@ impl PersistentStreamManager {
             endpoint,
             addr,
             stats,
+            keypair: None,
+        }
+    }
+
+    pub fn new_with_keypair(endpoint: Endpoint, addr: SocketAddr, stats: Arc<Mutex<Stats>>, keypair: Option<Keypair>) -> Self {
+        Self {
+            connection: None,
+            heartbeat_stream: None,
+            data_stream: None,
+            endpoint,
+            addr,
+            stats,
+            keypair,
+        }
+    }
+
+    /// Loads keypair from file path
+    pub fn load_keypair_from_path(&mut self, keypair_path: &str) -> Result<()> {
+        let keypair = load_keypair_from_file(keypair_path)?;
+        info!("Loaded keypair with public key: {}", keypair.pubkey());
+        
+        // Validate the keypair by testing signing/verification
+        crate::keypair::validate_keypair(&keypair)?;
+        
+        self.keypair = Some(keypair);
+        Ok(())
+    }
+
+    /// Creates a heartbeat packet, signed if keypair is available
+    fn create_heartbeat_packet(&self) -> Packet {
+        if let Some(ref keypair) = self.keypair {
+            info!("Creating signed heartbeat packet");
+            Packet::new_signed_heartbeat(keypair)
+        } else {
+            info!("Creating unsigned heartbeat packet");
+            Packet::new_heartbeat()
         }
     }
 
@@ -95,18 +135,18 @@ impl PersistentStreamManager {
                 // Send initial version packet on heartbeat stream so Atlas knows our version
                 info!("Sending pod heartbeatt to Atlas...");
                 if let Some((sender, _)) = &self.heartbeat_stream {
-                    let heartbeat_packet = Packet::new_heartbeat();
+                    let heartbeat_packet = self.create_heartbeat_packet();
                     send_packets(sender.clone(), heartbeat_packet, self.stats.clone()).await?;
                     info!("Pod heartbeat sent to Atlas");
                 }
                 
-                // Send initial heartbeat packet to announce stream
-                info!("Sending initial heartbeat packet to announce stream...");
-                if let Some((sender, _)) = &self.heartbeat_stream {
-                    let init_packet = Packet::new_heartbeat();
-                    send_packets(sender.clone(), init_packet, self.stats.clone()).await?;
-                    info!("Initial heartbeat packet sent successfully");
-                }
+                // // Send initial heartbeat packet to announce stream
+                // info!("Sending initial heartbeat packet to announce stream...");
+                // if let Some((sender, _)) = &self.heartbeat_stream {
+                //     let init_packet = self.create_heartbeat_packet();
+                //     send_packets(sender.clone(), init_packet, self.stats.clone()).await?;
+                //     info!("Initial heartbeat packet sent successfully");
+                // }
                 
                 // Create data stream  
                 let (data_send, data_recv) = connection.open_bi().await?;
@@ -228,7 +268,7 @@ impl PersistentStreamManager {
         info!("Sending heartbeat packet...");
         
         if let Some((sender, _)) = &self.heartbeat_stream {
-            let heartbeat_packet = Packet::new_heartbeat();
+            let heartbeat_packet = self.create_heartbeat_packet();
             info!("Heartbeat packet created: {:?}", heartbeat_packet.meta);
             
             match send_packets(sender.clone(), heartbeat_packet, self.stats.clone()).await {
@@ -311,7 +351,7 @@ impl PersistentStreamManager {
                         info!("Server heartbeat received! Sending response...");
                         
                         // Respond with heartbeat
-                        let response_packet = Packet::new_heartbeat();
+                        let response_packet = self.create_heartbeat_packet();
                         match send_packets(sender.clone(), response_packet, self.stats.clone()).await {
                             Ok(()) => {
                                 let total_elapsed = start_time.elapsed();
@@ -398,82 +438,111 @@ impl PersistentStreamManager {
     /// Handles data operations (Peek/Poke) on the dedicated data stream
     pub async fn handle_data_operation(&self, storage_state: &StorageState, packet: Packet) -> Result<()> {
         let start_time = std::time::Instant::now();
+        let operation_id = chrono::Utc::now().timestamp_nanos() as u64;
 
         let op = packet.meta.as_ref()
             .ok_or_else(|| anyhow!("Packet missing metadata"))
             .and_then(|meta| AtlasOperation::try_from(meta.op).map_err(|e| anyhow!("Invalid operation: {:?}", e)))?;
-        info!("Handling data operation: {:?}", op);
+        
+        info!("Handling data operation: {:?} (ID: {})", op, operation_id);
         let storage_state_clone = storage_state.clone();
         
-        match op {
+        // Execute the operation and prepare response
+        let operation_result = match op {
             AtlasOperation::Handshake => {
-                let pkt = Packet::new_handshake();
-                // send_packets(sender, pkt, stats.clone()).await?;
+                info!("Processing handshake");
+                Ok("Handshake completed".to_string())
             }
             AtlasOperation::PBigbang => {
                 info!("Received big bang data: {:?}", packet.data);
                 let big_bang_data: BigBangData = deserialize(&packet.data)?;
                 info!("Received big bang data: {:?}", big_bang_data);
 
-                storage_state_clone.handle_bigbang(big_bang_data).await?;
+                match storage_state_clone.handle_bigbang(big_bang_data).await {
+                    Ok(()) => Ok("Big bang operation completed successfully".to_string()),
+                    Err(e) => Err(e),
+                }
             }
             AtlasOperation::PArmageddon => {
                 let armageddon_data: ArmageddonData = deserialize(&packet.data)?;
-                storage_state_clone.handle_armageddon(armageddon_data).await?;
+                match storage_state_clone.handle_armageddon(armageddon_data).await {
+                    Ok(()) => Ok("Armageddon operation completed successfully".to_string()),
+                    Err(e) => Err(e),
+                }
             }
             AtlasOperation::PMkdir => {
                 let mkdir_data: MkDirPayload = deserialize(&packet.data)?;
-                storage_state_clone.handle_mkdir(mkdir_data).await?;
+                match storage_state_clone.handle_mkdir(mkdir_data).await {
+                    Ok(()) => Ok("Directory created successfully".to_string()),
+                    Err(e) => Err(e),
+                }
             }
             AtlasOperation::PRmdir => {
                 let rmdir_data: RmDirPayload = deserialize(&packet.data)?;
-                storage_state_clone.handle_rmdir(rmdir_data).await?;
+                match storage_state_clone.handle_rmdir(rmdir_data).await {
+                    Ok(()) => Ok("Directory removed successfully".to_string()),
+                    Err(e) => Err(e),
+                }
             }
             AtlasOperation::POpenrw => {
                 let create_file_data: CreateFilePayload = deserialize(&packet.data)?;
-                storage_state_clone.handle_create_file(create_file_data).await?;
+                match storage_state_clone.handle_create_file(create_file_data).await {
+                    Ok(()) => Ok("File created successfully".to_string()),
+                    Err(e) => Err(e),
+                }
             }
             AtlasOperation::PPeek => {
                 let peek_data: PeekPayload = deserialize(&packet.data)?;
                 if let Some((sender, _)) = &self.data_stream {
-                    storage_state_clone.handle_peek(sender.clone(), peek_data, self.stats.clone()).await?;
+                    match storage_state_clone.handle_peek(sender.clone(), peek_data, self.stats.clone()).await {
+                        Ok(()) => Ok("Peek operation completed successfully".to_string()),
+                        Err(e) => Err(e),
+                    }
+                } else {
+                    Err(anyhow!("Data stream not available for peek operation"))
                 }
             }
             AtlasOperation::PPoke => {
                 let poke_data: PokePayload = deserialize(&packet.data)?;
-                storage_state_clone.handle_poke(poke_data, self.stats.clone()).await?;
+                match storage_state_clone.handle_poke(poke_data, self.stats.clone()).await {
+                    Ok(()) => Ok("Poke operation completed successfully".to_string()),
+                    Err(e) => Err(e),
+                }
             }
             AtlasOperation::PRename => {
                 let rename_data: RenamePayload = deserialize(&packet.data)?;
-                storage_state_clone.handle_rename(rename_data).await?;
-            }
-            AtlasOperation::PQuorum => {
-                if let Some((sender, _)) = &self.data_stream {
-                    storage_state_clone.handle_quorum(sender.clone(), self.stats.clone()).await?;
-                }
-            }
-            AtlasOperation::PCache => {
-                // let cache_data: CachePayload = deserialize(&packet.data)?;
-                if let Some((sender, _)) = &self.data_stream {
-                    storage_state_clone.handle_cache(packet, sender.clone(), self.stats.clone()).await?;
+                match storage_state_clone.handle_rename(rename_data).await {
+                    Ok(()) => Ok("Rename operation completed successfully".to_string()),
+                    Err(e) => Err(e),
                 }
             }
             _ => {
-                // warn!("[STREAM-{}] Operation {:?} is not yet implemented.", self.s.id(), op);
-                return Err(anyhow!("Operation {:?} is not yet implemented", op));
+                let msg = format!("Operation {:?} not yet implemented", op);
+                error!("{}", msg);
+                Err(anyhow!(msg))
             }
-        }
-    
-    // Err(e) => {
-    //     error!(
-    //         "[STREAM-{}] Received packet with unknown operation code: {:?}",
-    //         sender.id(),
-    //         packet.meta
-    //     );
-    //     return Err(anyhow!("Received packet with unknown operation code: {:?}", packet.meta));
-    // }
+        };
 
-Ok(())
+        // Create and send response packet
+        let response_packet = match operation_result {
+            Ok(success_msg) => {
+                let elapsed = start_time.elapsed();
+                info!("✅ Operation {:?} (ID: {}) completed successfully in {:?}: {}", 
+                      op, operation_id, elapsed, success_msg);
+                Packet::new_success_response()
+            }
+            Err(error) => {
+                let elapsed = start_time.elapsed();
+                let error_msg = format!("Operation failed after {:?}: {}", elapsed, error);
+                error!("❌ Operation {:?} (ID: {}) failed: {}", op, operation_id, error);
+                Packet::new_error_response()
+            }
+        };
+
+        // Send the response back through the data stream
+        self.send_data_operation(response_packet).await?;
+        
+        Ok(())
     }
 }
 
@@ -484,6 +553,7 @@ pub async fn start_persistent_stream_loop(
     storage_state: StorageState,
     shutdown_rx: &mut broadcast::Receiver<()>,
     stats: Arc<Mutex<Stats>>,
+    keypair_path: Option<String>,
 ) {
     const RETRY_INTERVAL: u64 = 5;
     const STATUS_LOG_INTERVAL: u64 = 60; // Log detailed status every minute
@@ -498,6 +568,18 @@ pub async fn start_persistent_stream_loop(
     
     let mut rx2 = shutdown_rx.resubscribe();
     let mut stream_manager = PersistentStreamManager::new(endpoint, addr, stats);
+    
+    // Load keypair if provided
+    if let Some(ref path) = keypair_path {
+        match stream_manager.load_keypair_from_path(path) {
+            Ok(()) => info!("Keypair loaded successfully for signing heartbeats"),
+            Err(e) => {
+                error!("Failed to load keypair from {}: {}", path, e);
+                error!("Continuing without signed heartbeats");
+            }
+        }
+    }
+    
     let mut status_log_interval = tokio::time::interval(Duration::from_secs(STATUS_LOG_INTERVAL));
     let mut connection_attempts = 0u32;
     let mut successful_heartbeats = 0u64;

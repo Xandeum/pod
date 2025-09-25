@@ -4,6 +4,7 @@ use log::{info, warn};
 use pod::{
     client::{configure_client, set_default_client, start_persistent_stream_loop},
     gossip::{bootstrap_from_entrypoint_udp, start_udp_gossip, PeerList},
+    keypair,
     logger::init_logger,
     server::start_server,
     rpc::start_rpc_server,
@@ -17,8 +18,8 @@ use tokio::{
     sync::{broadcast, Mutex, RwLock},
 };
 
-const ATLAS_IP: &str = "95.217.229.171:5000"; //Devnet
-// const ATLAS_IP: &str = "65.108.233.175:5000"; // trynet
+// const ATLAS_IP: &str = "95.217.229.171:5000"; //Devnet
+const ATLAS_IP: &str = "65.108.233.175:5000"; // trynet
 // const ATLAS_IP: &str = "127.0.0.1:5000";
 const DEFAULT_BOOTSTRAP: &str = "173.212.207.32:9001"; // Default bootstrap node
 const QUIC_PORT: u16 = 5000;
@@ -59,6 +60,9 @@ struct Args {
     /// Atlas server address for data streaming [default: 95.217.229.171:5000]
     #[arg(long, value_name = "IP:PORT")]
     atlas_ip: Option<String>,
+
+    #[arg(long, value_name = "PATH", required = true)]
+    keypair: String,
 }
 
 #[tokio::main]
@@ -69,6 +73,28 @@ async fn main() -> Result<()> {
     let no_entrypoint = args.no_entrypoint;
     let rpc_ip = args.rpc_ip;
     let atlas_ip = args.atlas_ip;
+    let keypair_path = args.keypair;
+
+    println!("Using keypair file: {}", keypair_path);
+    
+    // Validate the keypair file before starting the application
+    match keypair::load_keypair_from_file(&keypair_path) {
+        Ok(keypair) => {
+            match keypair::validate_keypair(&keypair) {
+                Ok(()) => {
+                    println!("✓ Keypair validation successful");
+                }
+                Err(e) => {
+                    eprintln!("✗ Keypair validation failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("✗ Failed to load keypair from {}: {}", keypair_path, e);
+            std::process::exit(1);
+        }
+    }
 
     if no_entrypoint {
         println!("Running without entrypoint.");
@@ -142,6 +168,7 @@ async fn main() -> Result<()> {
             storage_state.clone(),
             &mut client_shutdown_rx,
             stats_clone,
+            Some(keypair_path),
         )
         .await;
     });

@@ -33,6 +33,8 @@ jobs:
     - name: Install dependencies
       run: |
         pip install mkdocs-material
+        pip install mkdocs-minify-plugin
+        pip install mkdocs-git-revision-date-localized-plugin
     
     - name: Extract version from tag
       id: version

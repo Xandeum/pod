@@ -25,8 +25,8 @@ use crate::protos::{
 use crate::stats::Stats;
 use common::consts::PAGE_SIZE;
 
-pub const FILE_PATH: &str = "/run/xandeum-pod";
-// pub const FILE_PATH: &str = "xandeum-pod";
+// pub const FILE_PATH: &str = "/run/xandeum-pod";
+pub const FILE_PATH: &str = "xandeum-pod";
 
 // Global operation counter to track operation ordering
 static OPERATION_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1844,6 +1844,7 @@ impl Inode {
             pages: initial_pages,  // Use provided pages instead of hardcoded value
             // ownership field will be added after proto recompilation
             // ownership: ownership,
+            co_owner: "a".to_string(),
         }
     }
     

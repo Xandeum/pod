@@ -1,0 +1,329 @@
+/*
+ * Xandeum Pod Documentation Custom Styles
+ * Color Palette:
+ * - Primary Purple: #622657
+ * - Teal: #198476
+ * - Orange: #fda31b
+ * - Dark Blue: #08113b
+ * - White: #ffffff
+ * - Black: #000000
+ */
+
+:root {
+  /* Xandeum Color Palette */
+  --xandeum-purple: #622657;
+  --xandeum-teal: #198476;
+  --xandeum-orange: #fda31b;
+  --xandeum-dark-blue: #08113b;
+  --xandeum-white: #ffffff;
+  --xandeum-black: #000000;
+  
+  /* Material Design Custom Colors */
+  --md-primary-fg-color: var(--xandeum-purple);
+  --md-primary-fg-color--light: #8e4d82;
+  --md-primary-fg-color--dark: #4a1e42;
+  --md-accent-fg-color: var(--xandeum-orange);
+  --md-accent-fg-color--transparent: rgba(253, 163, 27, 0.1);
+  
+  /* Background Colors */
+  --md-default-bg-color: var(--xandeum-white);
+  --md-default-fg-color: var(--xandeum-dark-blue);
+  --md-code-bg-color: #f8f9fa;
+  
+  /* Header */
+  --md-typeset-h1-color: var(--xandeum-purple);
+  --md-typeset-h2-color: var(--xandeum-dark-blue);
+  --md-typeset-h3-color: var(--xandeum-teal);
+  
+  /* Links */
+  --md-typeset-a-color: var(--xandeum-teal);
+  
+  /* Buttons */
+  --md-typeset-btn-color: var(--xandeum-white);
+  --md-typeset-btn-bg-color: var(--xandeum-purple);
+  --md-typeset-btn-border-color: var(--xandeum-purple);
+}
+
+/* Dark mode overrides */
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color: var(--xandeum-dark-blue);
+  --md-default-fg-color: var(--xandeum-white);
+  --md-code-bg-color: rgba(255, 255, 255, 0.05);
+  
+  --md-typeset-h1-color: var(--xandeum-orange);
+  --md-typeset-h2-color: var(--xandeum-white);
+  --md-typeset-h3-color: var(--xandeum-teal);
+  
+  --md-typeset-a-color: var(--xandeum-teal);
+}
+
+/* Header customization */
+.md-header {
+  background: linear-gradient(135deg, var(--xandeum-purple) 0%, var(--xandeum-dark-blue) 100%);
+  box-shadow: 0 4px 8px rgba(8, 17, 59, 0.1);
+}
+
+.md-header__title {
+  font-weight: 700;
+  color: var(--xandeum-white);
+}
+
+/* Navigation tabs */
+.md-tabs {
+  background: var(--xandeum-dark-blue);
+}
+
+.md-tabs__item {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.md-tabs__item:hover {
+  color: var(--xandeum-orange);
+}
+
+.md-tabs__link--active {
+  color: var(--xandeum-orange) !important;
+  border-bottom-color: var(--xandeum-orange);
+}
+
+/* Sidebar navigation */
+.md-nav__title {
+  color: var(--xandeum-purple);
+  font-weight: 600;
+}
+
+.md-nav__item--active > .md-nav__link {
+  color: var(--xandeum-purple);
+  font-weight: 600;
+}
+
+.md-nav__link:hover {
+  color: var(--xandeum-teal);
+}
+
+/* Code blocks */
+.highlight {
+  background: var(--md-code-bg-color);
+  border-left: 4px solid var(--xandeum-teal);
+  border-radius: 4px;
+}
+
+.codehilite {
+  background: var(--md-code-bg-color);
+  border-left: 4px solid var(--xandeum-teal);
+  border-radius: 4px;
+}
+
+/* Inline code */
+.md-typeset code {
+  background: var(--md-code-bg-color);
+  color: var(--xandeum-purple);
+  border: 1px solid rgba(98, 38, 87, 0.1);
+  border-radius: 3px;
+}
+
+/* Buttons */
+.md-button {
+  background: var(--xandeum-purple);
+  color: var(--xandeum-white);
+  border: 2px solid var(--xandeum-purple);
+  border-radius: 6px;
+  font-weight: 600;
+  transition: all 0.3s ease;
+}
+
+.md-button:hover {
+  background: var(--xandeum-teal);
+  border-color: var(--xandeum-teal);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(25, 132, 118, 0.3);
+}
+
+.md-button--primary {
+  background: linear-gradient(135deg, var(--xandeum-orange) 0%, var(--xandeum-teal) 100%);
+  border: none;
+}
+
+.md-button--primary:hover {
+  background: linear-gradient(135deg, var(--xandeum-teal) 0%, var(--xandeum-purple) 100%);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(25, 132, 118, 0.4);
+}
+
+/* Admonitions */
+.md-typeset .admonition.tip {
+  border-color: var(--xandeum-teal);
+}
+
+.md-typeset .admonition.tip > .admonition-title {
+  background: rgba(25, 132, 118, 0.1);
+  border-color: var(--xandeum-teal);
+}
+
+.md-typeset .admonition.info {
+  border-color: var(--xandeum-orange);
+}
+
+.md-typeset .admonition.info > .admonition-title {
+  background: rgba(253, 163, 27, 0.1);
+  border-color: var(--xandeum-orange);
+}
+
+.md-typeset .admonition.warning {
+  border-color: var(--xandeum-orange);
+}
+
+.md-typeset .admonition.warning > .admonition-title {
+  background: rgba(253, 163, 27, 0.1);
+  border-color: var(--xandeum-orange);
+}
+
+/* Tables */
+.md-typeset table:not([class]) {
+  border: 1px solid rgba(98, 38, 87, 0.1);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.md-typeset table:not([class]) th {
+  background: linear-gradient(135deg, var(--xandeum-purple) 0%, var(--xandeum-dark-blue) 100%);
+  color: var(--xandeum-white);
+  font-weight: 600;
+}
+
+.md-typeset table:not([class]) tr:nth-child(even) {
+  background: rgba(98, 38, 87, 0.02);
+}
+
+/* Search */
+.md-search__form {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+}
+
+.md-search__input {
+  color: var(--xandeum-white);
+}
+
+.md-search__input::placeholder {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* Footer */
+.md-footer {
+  background: var(--xandeum-dark-blue);
+  color: var(--xandeum-white);
+}
+
+.md-footer-meta {
+  background: rgba(8, 17, 59, 0.8);
+}
+
+/* Custom logo styling */
+.md-header__title .md-ellipsis {
+  position: relative;
+}
+
+.md-header__title .md-ellipsis::before {
+  content: "🚀";
+  margin-right: 8px;
+  font-size: 1.2em;
+}
+
+/* Xandeum branding elements */
+.xandeum-gradient {
+  background: linear-gradient(135deg, var(--xandeum-purple) 0%, var(--xandeum-teal) 50%, var(--xandeum-orange) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  font-weight: 700;
+}
+
+.xandeum-badge {
+  display: inline-block;
+  background: linear-gradient(135deg, var(--xandeum-orange) 0%, var(--xandeum-teal) 100%);
+  color: var(--xandeum-white);
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.8em;
+  font-weight: 600;
+  margin-left: 8px;
+}
+
+/* Hero section styling */
+.hero-section {
+  background: linear-gradient(135deg, var(--xandeum-dark-blue) 0%, var(--xandeum-purple) 100%);
+  color: var(--xandeum-white);
+  padding: 2rem;
+  margin: -24px -24px 24px -24px;
+  border-radius: 0 0 12px 12px;
+}
+
+.hero-section h1 {
+  color: var(--xandeum-white);
+  margin-bottom: 1rem;
+}
+
+.hero-section p {
+  font-size: 1.1em;
+  opacity: 0.9;
+}
+
+/* Version badge */
+.version-badge {
+  background: var(--xandeum-orange);
+  color: var(--xandeum-white);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.7em;
+  font-weight: 600;
+  margin-left: 8px;
+  vertical-align: super;
+}
+
+/* Responsive adjustments */
+@media screen and (max-width: 76.1875em) {
+  .md-nav--primary .md-nav__title {
+    background: var(--xandeum-purple);
+    color: var(--xandeum-white);
+  }
+}
+
+/* Custom animations */
+@keyframes xandeum-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.xandeum-pulse {
+  animation: xandeum-pulse 2s ease-in-out infinite;
+}
+
+/* Status indicators */
+.status-online {
+  color: var(--xandeum-teal);
+}
+
+.status-warning {
+  color: var(--xandeum-orange);
+}
+
+.status-error {
+  color: #dc3545;
+}
+
+/* Performance optimizations */
+.md-header,
+.md-tabs,
+.md-nav {
+  will-change: transform;
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+} 

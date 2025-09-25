@@ -1,6 +1,9 @@
-# Xandeum Pod Documentation
+# <span class="xandeum-gradient">Xandeum Pod</span> Documentation <span class="version-badge">v1.0.0</span>
 
-Welcome to the complete documentation for Xandeum Pod - a high-performance blockchain node implementation.
+<div class="hero-section">
+  <h1>🚀 High-Performance Blockchain Node</h1>
+  <p>Complete documentation for Xandeum Pod - a cutting-edge blockchain node implementation featuring JSON-RPC API, peer-to-peer communication, and real-time monitoring.</p>
+</div>
 
 ## Quick Start
 
@@ -39,16 +42,18 @@ curl -X POST http://127.0.0.1:6000/rpc \
 
 ## What's Included
 
-### 🔌 RPC API
+### 🔌 **RPC API** <span class="xandeum-badge">JSON-RPC 2.0</span>
 Complete JSON-RPC 2.0 API for interacting with your pod:
+
 - **get-version**: Get pod software version
-- **get-stats**: Retrieve comprehensive pod statistics
+- **get-stats**: Retrieve comprehensive pod statistics  
 - **get-pods**: List known peer pods in the network
 
 [View RPC API Documentation](rpc-api.md){ .md-button .md-button--primary }
 
-### ⚙️ CLI Usage
+### ⚙️ **CLI Usage** <span class="xandeum-badge">Command Line</span>
 Comprehensive command-line reference:
+
 - **--rpc-ip**: Configure RPC server IP binding
 - **--entrypoint**: Set bootstrap node for peer discovery
 - **--atlas-ip**: Configure Atlas server connection
@@ -58,21 +63,55 @@ Comprehensive command-line reference:
 
 ## Architecture Overview
 
-The Xandeum Pod consists of several key components:
+The **Xandeum Pod** consists of several key components working in harmony:
 
-- **RPC Server**: JSON-RPC API on port 6000 (configurable IP)
-- **Stats Dashboard**: Web interface on port 80 (localhost only)
-- **Gossip Protocol**: Peer-to-peer communication on port 9001
-- **Atlas Client**: Data streaming connection on port 5000
+| Component | Description | Status |
+|-----------|-------------|--------|
+| **RPC Server** | JSON-RPC API endpoint | <span class="status-online">●</span> Active |
+| **Stats Dashboard** | Real-time monitoring interface | <span class="status-online">●</span> Active |
+| **Gossip Protocol** | Peer-to-peer communication | <span class="status-online">●</span> Active |
+| **Atlas Client** | Data streaming connection | <span class="status-online">●</span> Active |
 
-## Default Configuration
+## Network Configuration
 
-| Service | Port | Access | Configurable |
-|---------|------|--------|-------------|
-| RPC API | 6000 | Private (127.0.0.1) | IP only |
-| Stats Dashboard | 80 | Private (127.0.0.1) | No |
-| Gossip Protocol | 9001 | All interfaces | No |
-| Atlas Connection | 5000 | Fixed endpoint | No |
+| Service | Port | Protocol | Access | Configurable |
+|---------|------|----------|--------|-------------|
+| **RPC API** | `6000` | HTTP/TCP | Private (127.0.0.1) | IP binding only |
+| **Stats Dashboard** | `80` | HTTP/TCP | Private (127.0.0.1) | No |
+| **Gossip Protocol** | `9001` | UDP | Public (0.0.0.0) | No |
+| **Atlas Connection** | `5000` | QUIC/UDP | Public (outbound) | Atlas IP only |
 
 !!! tip "Security by Default"
-    The pod is configured to be secure by default - RPC API is private unless explicitly configured otherwise.
+    The pod is configured to be secure by default - RPC API is private unless explicitly configured otherwise. Use `--rpc-ip 0.0.0.0` for public access.
+
+!!! info "Performance Optimized"
+    Xandeum Pod utilizes modern protocols like QUIC for high-performance data streaming and UDP for efficient peer discovery.
+
+## Key Features
+
+### 🔒 **Security First**
+- Private RPC by default
+- Certificate-based QUIC connections
+- Secure peer authentication
+
+### ⚡ **High Performance**
+- QUIC/UDP for Atlas streaming
+- Efficient UDP gossip protocol
+- Real-time statistics monitoring
+
+### 🌐 **Network Ready**
+- Automatic peer discovery
+- Bootstrap node support
+- Configurable network binding
+
+### 📊 **Monitoring Built-in**
+- Live stats dashboard
+- Performance metrics
+- Network topology visibility
+
+---
+
+<div style="text-align: center; margin-top: 2rem; opacity: 0.8;">
+  <strong>Powered by <span class="xandeum-gradient">Xandeum</span></strong><br>
+  <small>Building the future of blockchain infrastructure</small>
+</div>

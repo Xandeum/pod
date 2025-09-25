@@ -1,6 +1,6 @@
-# CLI Usage
+# <span class="xandeum-gradient">CLI Usage</span> <span class="xandeum-badge">Command Line</span>
 
-Complete reference for all command-line arguments and configuration options.
+Complete reference for all command-line arguments and configuration options for **Xandeum Pod**.
 
 ## Basic Usage
 
@@ -11,7 +11,7 @@ pod
 
 Starts the pod with default configuration:
 - RPC server on `127.0.0.1:6000` (private)
-- Stats server on `127.0.0.1:80` (private)
+- Stats server on `127.0.0.1:80` (private) 
 - Uses default bootstrap node for peer discovery
 
 ### Check Version
@@ -26,41 +26,20 @@ pod --help
 # Shows complete usage information with all options and examples
 ```
 
-**Output:**
-```
-Xandeum Pod is a high-performance blockchain node that provides JSON-RPC API, 
-peer-to-peer communication via gossip protocol, and real-time statistics monitoring.
+!!! example "Help Output"
+    ```
+    Xandeum Pod is a high-performance blockchain node that provides JSON-RPC API, 
+    peer-to-peer communication via gossip protocol, and real-time statistics monitoring.
 
-PORTS:
-    6000    RPC API (configurable IP binding)
-    80      Stats dashboard (localhost only)  
-    9001    Gossip protocol (peer communication)
-    5000    Atlas connection (outbound)
+    PORTS:
+        6000    RPC API (HTTP/TCP, configurable IP binding)
+        80      Stats dashboard (HTTP/TCP, localhost only)  
+        9001    Gossip protocol (UDP, public, peer communication)
+        5000    Atlas connection (QUIC/UDP, public, outbound)
 
-DOCUMENTATION:
-    For complete documentation, visit /usr/share/doc/pod/ after installation
-
-Usage: pod [OPTIONS]
-
-Options:
-      --rpc-ip <IP_ADDRESS>
-          Set RPC server IP binding [default: 127.0.0.1 for private]
-          
-      --entrypoint <IP:PORT>
-          Bootstrap node for peer discovery [default: 173.212.207.32:9001]
-
-      --no-entrypoint
-          Disable peer discovery (run in isolation)
-
-      --atlas-ip <IP:PORT>
-          Atlas server address for data streaming [default: 95.217.229.171:5000]
-
-  -h, --help
-          Print help (see a summary with '-h')
-
-  -V, --version
-          Print version
-```
+    DOCUMENTATION:
+        For complete documentation, visit https://xandeum.github.io/pod-docs/ after installation
+    ```
 
 ## Command-Line Arguments
 

@@ -1,6 +1,7 @@
 pub mod cert;
 pub mod client;
 pub mod gossip;
+pub mod keypair;
 pub mod logger;
 pub mod packet;
 pub mod rpc;
