@@ -17,7 +17,7 @@ use rustls::ServerConfig as RustlsServerConfig;
 use crate::cert::AcceptAllVerifier;
 use crate::keypair::load_keypair_from_file;
 use crate::packet::{reassemble_packets, split_packet, AtlasOperation, Packet, MAX_PACKET_SIZE};
-use crate::protos::{ArmageddonData, BigBangData, CachePayload, CreateFilePayload, GlobalCatalogPage, MkDirPayload, RmDirPayload};
+use crate::protos::{ArmageddonData, AssignCoownerPayload, BigBangData, CachePayload, CreateFilePayload, GlobalCatalogPage, MkDirPayload, RmDirPayload};
 use crate::protos::{PeekPayload, PokePayload, RenamePayload};
 use crate::stats::Stats;
 use crate::storage::StorageState;
@@ -513,6 +513,13 @@ impl PersistentStreamManager {
                 let rename_data: RenamePayload = deserialize(&packet.data)?;
                 match storage_state_clone.handle_rename(rename_data).await {
                     Ok(()) => Ok("Rename operation completed successfully".to_string()),
+                    Err(e) => Err(e),
+                }
+            }
+            AtlasOperation::PAssignCoowner => {
+                let assign_co_owner_data: AssignCoownerPayload = deserialize(&packet.data)?;
+                match storage_state_clone.handle_assign_co_owner(assign_co_owner_data).await {
+                    Ok(()) => Ok("Assign co-owner operation completed successfully".to_string()),
                     Err(e) => Err(e),
                 }
             }
