@@ -1,32 +1,46 @@
-# <span class="xandeum-gradient">Xandeum Pod</span> Documentation <span class="version-badge">v1.0.0</span>
+# Xandeum Pod Documentation
 
-<div class="hero-section">
-  <h1>🚀 High-Performance Blockchain Node</h1>
-  <p>Complete documentation for Xandeum Pod - a cutting-edge blockchain node implementation featuring JSON-RPC API, peer-to-peer communication, and real-time monitoring.</p>
-</div>
+**Version:** 0.4.2
+
+## 🚀 High-Performance Blockchain Node
+
+Complete documentation for Xandeum Pod - a high-performance blockchain node with QUIC-based data streaming, UDP gossip protocol for peer discovery, JSON-RPC API, and real-time monitoring dashboard.
 
 ## Quick Start
 
 ### Installation
 ```bash
-# Install via apt package manager
-sudo apt update
-sudo apt install pod
+# Build from source
+cargo build --release
+
+# Install to system
+cargo install --path .
+```
+
+### Prerequisites
+You need a Solana keypair file to run the pod. Generate one if you don't have it:
+
+```bash
+# Generate a new keypair
+solana-keygen new -o key.json
 ```
 
 ### Basic Usage
 ```bash
-# Start with default settings (private RPC)
-pod
+# Start with required keypair (private RPC)
+pod --keypair key.json
 
 # Start with public RPC access
-pod --rpc-ip 0.0.0.0
+pod --keypair key.json --rpc-ip 0.0.0.0
 
 # Check version
 pod --version
 
 # Get help
 pod --help
+
+# View gossip network from a running pod
+pod --gossip --rpc-ip <pod-ip>
 ```
 
 ### Test Your Setup
@@ -42,35 +56,39 @@ curl -X POST http://127.0.0.1:6000/rpc \
 
 ## What's Included
 
-### 🔌 **RPC API** <span class="xandeum-badge">JSON-RPC 2.0</span>
+### 🔌 RPC API (JSON-RPC 2.0)
 Complete JSON-RPC 2.0 API for interacting with your pod:
 
 - **get-version**: Get pod software version
-- **get-stats**: Retrieve comprehensive pod statistics  
-- **get-pods**: List known peer pods in the network
+- **get-stats**: Retrieve comprehensive pod statistics including CPU, RAM, uptime, and packet metrics
+- **get-pods**: List known peer pods in the network with version and public keys
 
-[View RPC API Documentation](rpc-api.md){ .md-button .md-button--primary }
+[View RPC API Documentation](rpc-api.md)
 
-### ⚙️ **CLI Usage** <span class="xandeum-badge">Command Line</span>
+### ⚙️ CLI Usage
 Comprehensive command-line reference:
 
-- **--rpc-ip**: Configure RPC server IP binding
+- **--keypair**: Path to Solana keypair file (required)
+- **--rpc-ip**: Configure RPC server IP binding (default: 127.0.0.1)
 - **--entrypoint**: Set bootstrap node for peer discovery
 - **--atlas-ip**: Configure Atlas server connection
-- And more...
+- **--gossip**: Display network gossip peers and exit
+- **--no-entrypoint**: Run in isolation without peer discovery
 
-[View CLI Documentation](cli.md){ .md-button .md-button--primary }
+[View CLI Documentation](cli.md)
 
 ## Architecture Overview
 
-The **Xandeum Pod** consists of several key components working in harmony:
+The **Xandeum Pod** consists of several key components:
 
-| Component | Description | Status |
-|-----------|-------------|--------|
-| **RPC Server** | JSON-RPC API endpoint | <span class="status-online">●</span> Active |
-| **Stats Dashboard** | Real-time monitoring interface | <span class="status-online">●</span> Active |
-| **Gossip Protocol** | Peer-to-peer communication | <span class="status-online">●</span> Active |
-| **Atlas Client** | Data streaming connection | <span class="status-online">●</span> Active |
+| Component | Description | Protocol |
+|-----------|-------------|----------|
+| **Atlas Client** | Persistent QUIC streams for data operations with heartbeat mechanism | QUIC/UDP |
+| **RPC Server** | JSON-RPC 2.0 API endpoint on port 6000 | HTTP/TCP |
+| **Gossip Service** | UDP-based peer discovery and network gossip | UDP |
+| **Stats Server** | Real-time monitoring dashboard on port 80 | HTTP/TCP |
+| **Storage Layer** | Page-based storage with global catalog and filesystem management | Local |
+| **Keypair Auth** | Solana keypair-based signing for secure operations | Ed25519 |
 
 ## Network Configuration
 
@@ -89,29 +107,33 @@ The **Xandeum Pod** consists of several key components working in harmony:
 
 ## Key Features
 
-### 🔒 **Security First**
-- Private RPC by default
-- Certificate-based QUIC connections
-- Secure peer authentication
+### 🔒 **Security & Authentication**
+- Solana keypair-based authentication
+- Signed heartbeat packets for identity verification
+- Private RPC by default (localhost only)
+- TLS certificate verification for QUIC connections
 
 ### ⚡ **High Performance**
-- QUIC/UDP for Atlas streaming
-- Efficient UDP gossip protocol
-- Real-time statistics monitoring
+- Persistent QUIC streams for low-latency data operations
+- Server-initiated heartbeat mechanism keeps connections alive
+- UDP gossip protocol for efficient peer discovery
+- 2 managed streams: heartbeat + data operations
+- Page-based storage (1 MiB pages)
 
-### 🌐 **Network Ready**
-- Automatic peer discovery
-- Bootstrap node support
-- Configurable network binding
+### 🌐 **Peer-to-Peer Network**
+- Automatic peer discovery via UDP gossip (port 9001)
+- Bootstrap node support with fallback to default
+- Message deduplication to prevent gossip loops
+- Periodic peer pruning (inactive > 1 hour)
+- Version tracking and public key sharing
 
-### 📊 **Monitoring Built-in**
-- Live stats dashboard
-- Performance metrics
-- Network topology visibility
+### 📊 **Monitoring & Observability**
+- Web-based stats dashboard (localhost:80)
+- Real-time CPU, RAM, uptime metrics
+- Packet send/receive counters
+- Active stream monitoring
+- File storage size tracking
 
 ---
 
-<div style="text-align: center; margin-top: 2rem; opacity: 0.8;">
-  <strong>Powered by <span class="xandeum-gradient">Xandeum</span></strong><br>
-  <small>Building the future of blockchain infrastructure</small>
-</div>
+**Powered by Xandeum** - Building the future of blockchain infrastructure

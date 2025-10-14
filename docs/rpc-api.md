@@ -40,7 +40,7 @@ The pod uses several network ports for different services:
     {
       "jsonrpc": "2.0",
       "result": {
-        "version": "1.0.0"
+        "version": "0.4.2"
       },
       "id": 1
     }
@@ -99,17 +99,18 @@ The pod uses several network ports for different services:
 
     | Field | Type | Description |
     |-------|------|-------------|
-    | `metadata.total_bytes` | number | Total bytes processed |
-    | `metadata.total_pages` | number | Total pages in storage |
-    | `metadata.last_updated` | number | Unix timestamp of last update |
-    | `stats.cpu_percent` | number | Current CPU usage percentage |
+    | `metadata.total_bytes` | number | Total bytes processed by the pod |
+    | `metadata.total_pages` | number | Total pages in storage (each page is 1 MiB) |
+    | `metadata.current_index` | number | Current storage index position |
+    | `metadata.last_updated` | number | Unix timestamp of last metadata update |
+    | `stats.cpu_percent` | number | Current CPU usage percentage (0-100) |
     | `stats.ram_used` | number | RAM used in bytes |
     | `stats.ram_total` | number | Total RAM available in bytes |
-    | `stats.uptime` | number | Uptime in seconds |
-    | `stats.packets_received` | number | Packets received per second |
-    | `stats.packets_sent` | number | Packets sent per second |
-    | `stats.active_streams` | number | Number of active network streams |
-    | `file_size` | number | Storage file size in bytes |
+    | `stats.uptime` | number | Pod uptime in seconds |
+    | `stats.packets_received` | number | Total packets received (QUIC + gossip) |
+    | `stats.packets_sent` | number | Total packets sent (QUIC + gossip) |
+    | `stats.active_streams` | number | Number of active QUIC streams (should be 2: heartbeat + data) |
+    | `file_size` | number | Storage file size in bytes (xandeum-pod file) |
 
 === "get-pods"
 
@@ -153,11 +154,14 @@ The pod uses several network ports for different services:
 
     | Field | Type | Description |
     |-------|------|-------------|
-    | `address` | string | IP address and port of the peer pod |
-    | `version` | string | Software version of the peer pod |
-    | `last_seen` | string | Human-readable timestamp of last contact |
-    | `last_seen_timestamp` | number | Unix timestamp of last contact |
-    | `total_count` | number | Total number of known pods |
+    | `address` | string | IP address and port of the peer pod (gossip port 9001) |
+    | `version` | string | Software version of the peer pod (e.g., "0.4.2") |
+    | `last_seen_timestamp` | number | Unix timestamp of last gossip message received |
+    | `pubkey` | string (optional) | Solana public key of the peer pod for identity verification |
+    | `total_count` | number | Total number of known pods in the gossip network |
+
+    !!! note "Peer Discovery"
+        Peers are discovered via UDP gossip protocol on port 9001. Inactive peers (not seen for > 1 hour) are automatically pruned.
 
 ## Error Handling
 
@@ -223,7 +227,15 @@ print(f"Pod version: {version['result']['version']}")
 
 # Get stats
 stats = call_rpc("get-stats")
-print(f"CPU usage: {stats['result']['stats']['cpu_percent']}%")
+print(f"CPU usage: {stats['result']['cpu_percent']}%")
+print(f"Active streams: {stats['result']['active_streams']}")
+print(f"Packets sent: {stats['result']['packets_sent']}")
+
+# Get known peers
+peers = call_rpc("get-pods")
+print(f"Total peers: {peers['result']['total_count']}")
+for pod in peers['result']['pods']:
+    print(f"  - {pod['address']} (version: {pod['version']})")
 ```
 
 ### JavaScript/Node.js Example
@@ -253,7 +265,14 @@ async function callRPC(method, params = null) {
   console.log(`Pod version: ${version.result.version}`);
   
   const stats = await callRPC('get-stats');
-  console.log(`Uptime: ${stats.result.stats.uptime} seconds`);
+  console.log(`Uptime: ${stats.result.uptime} seconds`);
+  console.log(`Active QUIC streams: ${stats.result.active_streams}`);
+  
+  const peers = await callRPC('get-pods');
+  console.log(`Known peers: ${peers.result.total_count}`);
+  peers.result.pods.forEach(pod => {
+    console.log(`  - ${pod.address} (v${pod.version})`);
+  });
 })();
 ```
 
@@ -280,11 +299,17 @@ echo "Getting stats..."
 call_rpc "get-stats" | jq '.result.stats.cpu_percent'
 ```
 
-!!! tip "Installation"
-    Install the pod via apt: `sudo apt install pod`
+!!! tip "Build from Source"
+    Build the pod from source: `cargo build --release`
+
+!!! info "Keypair Required"
+    The pod requires a Solana keypair to run: `pod --keypair key.json`
 
 !!! tip "Rate Limiting"
     There are currently no rate limits on the RPC API, but be mindful of resource usage when making frequent requests.
 
 !!! warning "Security"
-    When using `--rpc-ip 0.0.0.0`, your RPC API will be accessible from any network interface. Ensure proper firewall rules are in place. 
+    When using `--rpc-ip 0.0.0.0`, your RPC API will be accessible from any network interface. Ensure proper firewall rules are in place.
+
+!!! note "Monitoring Dashboard"
+    In addition to the RPC API, a web-based stats dashboard is available at `http://localhost:80` with real-time charts and metrics. 

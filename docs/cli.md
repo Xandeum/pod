@@ -1,23 +1,24 @@
-# <span class="xandeum-gradient">CLI Usage</span> <span class="xandeum-badge">Command Line</span>
+# CLI Usage
 
-Complete reference for all command-line arguments and configuration options for **Xandeum Pod**.
+Complete reference for all command-line arguments and configuration options for Xandeum Pod.
 
 ## Basic Usage
 
-### Start with Default Settings
+### Start with Required Keypair
 ```bash
-pod
+pod --keypair key.json
 ```
 
 Starts the pod with default configuration:
 - RPC server on `127.0.0.1:6000` (private)
 - Stats server on `127.0.0.1:80` (private) 
-- Uses default bootstrap node for peer discovery
+- Uses default bootstrap node `173.212.207.32:9001` for peer discovery
+- Connects to Atlas server at `65.108.233.175:5000`
 
 ### Check Version
 ```bash
 pod --version
-# Output: pod 1.0.0
+# Output: pod 0.4.2
 ```
 
 ### Get Help
@@ -42,6 +43,28 @@ pod --help
     ```
 
 ## Command-Line Arguments
+
+### --keypair `<PATH>`
+*Required (unless using --gossip)* - Path to Solana keypair file in JSON format.
+
+This keypair is used for:
+- Signing heartbeat packets sent to Atlas server
+- Authenticating the pod in the network
+- Identity verification with other nodes
+
+=== "Example"
+
+    ```bash
+    # Use existing keypair
+    pod --keypair ./key.json
+    
+    # Generate new keypair first
+    solana-keygen new -o my-pod-key.json
+    pod --keypair my-pod-key.json
+    ```
+
+!!! warning "Keypair Security"
+    Keep your keypair file secure. It identifies your pod in the network. Never share it publicly.
 
 ### --rpc-ip `<IP_ADDRESS>`
 *Optional* - Specifies the IP address for the RPC server to bind to.
@@ -98,24 +121,48 @@ pod --help
 ### --atlas-ip `<IP:PORT>`
 *Optional* - Specifies the Atlas server address for data streaming and synchronization.
 
-**Default**: `95.217.229.171:5000` (Devnet)
+**Default**: `65.108.233.175:5000` (Trynet)
 
 === "Examples"
 
     ```bash
     # Connect to local Atlas server
-    pod --atlas-ip 127.0.0.1:5000
+    pod --keypair key.json --atlas-ip 127.0.0.1:5000
 
     # Connect to custom Atlas server
-    pod --atlas-ip 10.0.0.10:5000
+    pod --keypair key.json --atlas-ip 10.0.0.10:5000
     ```
+
+!!! info "Atlas Connection"
+    The pod maintains 2 persistent QUIC streams with Atlas:
+    - **Heartbeat stream**: For keep-alive and identity verification
+    - **Data stream**: For blockchain data operations (peek/poke/bigbang/etc.)
+
+### --gossip
+*Standalone* - Queries a running pod's RPC endpoint to display the gossip network and exits.
+
+This is useful for monitoring the peer-to-peer network without running a full pod.
+
+=== "Example"
+
+    ```bash
+    # View gossip network from default local pod
+    pod --gossip
+    
+    # View gossip network from remote pod
+    pod --gossip --rpc-ip 161.97.97.41
+    ```
+
+**Output includes:**
+- Total peer count
+- Each peer's address, version, last seen time, and public key
 
 ### --version
 *Standalone* - Displays the pod software version and exits immediately.
 
 ```bash
 pod --version
-# Output: pod 1.0.0
+# Output: pod 0.4.2
 ```
 
 ### --help
@@ -130,27 +177,33 @@ pod --help
 
 ### 🔒 Private Development Setup
 ```bash
-pod --no-entrypoint
+pod --keypair key.json --no-entrypoint
 ```
 Perfect for local development and testing. No external connections, RPC only accessible locally.
 
 ### 🌐 Public Node
 ```bash
-pod --rpc-ip 0.0.0.0
+pod --keypair key.json --rpc-ip 0.0.0.0
 ```
 Runs a public node with RPC API accessible from any network interface. Uses default bootstrap for peer discovery.
 
 ### 🏢 Enterprise/Private Network
 ```bash
-pod --rpc-ip 192.168.1.100 --entrypoint 192.168.1.50:9001 --atlas-ip 192.168.1.10:5000
+pod --keypair key.json --rpc-ip 192.168.1.100 --entrypoint 192.168.1.50:9001 --atlas-ip 192.168.1.10:5000
 ```
 Configured for private corporate networks with custom Atlas server and internal bootstrap node.
 
 ### 🧪 Local Testing with Custom Atlas
 ```bash
-pod --atlas-ip 127.0.0.1:5000 --no-entrypoint
+pod --keypair key.json --atlas-ip 127.0.0.1:5000 --no-entrypoint
 ```
 For testing with a local Atlas server without peer discovery.
+
+### 👀 Monitor Gossip Network
+```bash
+pod --gossip --rpc-ip 161.97.97.41
+```
+View the peer-to-peer network topology from any running pod without starting your own.
 
 ## Port Information
 
@@ -207,7 +260,7 @@ pod --invalid-option
 ### Development Environment
 ```bash
 # Start isolated pod for development
-pod --no-entrypoint
+pod --keypair key.json --no-entrypoint
 
 # Test RPC locally
 curl -X POST http://127.0.0.1:6000/rpc \
@@ -218,7 +271,7 @@ curl -X POST http://127.0.0.1:6000/rpc \
 ### Production Public Node
 ```bash
 # Start public node with proper logging
-RUST_LOG=info pod --rpc-ip 0.0.0.0
+RUST_LOG=info pod --keypair key.json --rpc-ip 0.0.0.0
 
 # Verify RPC is accessible
 curl -X POST http://YOUR_PUBLIC_IP:6000/rpc \
@@ -230,9 +283,30 @@ curl -X POST http://YOUR_PUBLIC_IP:6000/rpc \
 ```bash
 # Configure for private network
 pod \
+  --keypair key.json \
   --rpc-ip 10.0.1.100 \
   --entrypoint 10.0.1.50:9001 \
   --atlas-ip 10.0.1.10:5000
+```
+
+### Monitor Network Gossip
+```bash
+# View gossip peers from a running pod
+pod --gossip --rpc-ip 161.97.97.41
+
+# Example output:
+# 🔍 Querying gossip network from 161.97.97.41...
+# 
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║              XANDEUM POD GOSSIP NETWORK                          ║
+# ╚══════════════════════════════════════════════════════════════════╝
+# 
+# 📊 Total Peers: 5
+# 
+# ADDRESS              VERSION    LAST SEEN       PUBKEY
+# ────────────────────────────────────────────────────────────────────
+# 192.168.1.10:9001    0.4.2      2m ago         5QJ7K...Gx2p9
+# 10.0.0.5:9001        0.4.1      5m ago         8HmN...k5L1a
 ```
 
 ## Environment Variables

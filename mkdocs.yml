@@ -34,8 +34,7 @@ theme:
     - content.code.copy
     - content.code.annotate
     - content.tabs.link
-  logo: assets/xandeum-logo.svg
-  favicon: assets/favicon.ico
+  logo: assets/XandeumLogoStandard.png
   font:
     text: Inter
     code: JetBrains Mono
