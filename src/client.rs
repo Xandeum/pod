@@ -17,7 +17,7 @@ use rustls::ServerConfig as RustlsServerConfig;
 use crate::cert::AcceptAllVerifier;
 use crate::keypair::load_keypair_from_file;
 use crate::packet::{reassemble_packets, split_packet, AtlasOperation, Packet, MAX_PACKET_SIZE};
-use crate::protos::{ArmageddonData, AssignCoownerPayload, BigBangData, CachePayload, CreateFilePayload, GlobalCatalogPage, MkDirPayload, RmDirPayload};
+use crate::protos::{ArmageddonData, AssignCoownerPayload, BigBangData, CachePayload, CreateFilePayload, GlobalCatalogPage, MkDirPayload, RmDirPayload, RmFilePayload};
 use crate::protos::{PeekPayload, PokePayload, RenamePayload};
 use crate::stats::Stats;
 use crate::storage::StorageState;
@@ -464,6 +464,7 @@ impl PersistentStreamManager {
                 }
             }
             AtlasOperation::PArmageddon => {
+                info!("Received armageddon data: {:?}", packet.data);
                 let armageddon_data: ArmageddonData = deserialize(&packet.data)?;
                 match storage_state_clone.handle_armageddon(armageddon_data).await {
                     Ok(()) => Ok("Armageddon operation completed successfully".to_string()),
@@ -509,6 +510,13 @@ impl PersistentStreamManager {
                     Err(e) => Err(e),
                 }
             }
+            AtlasOperation::PRm => {
+                let rm_data: RmFilePayload = deserialize(&packet.data)?;
+                match storage_state_clone.handle_delete_file(rm_data).await {
+                    Ok(()) => Ok("Delete file operation completed successfully".to_string()),
+                    Err(e) => Err(e),
+                }
+            }
             AtlasOperation::PRename => {
                 let rename_data: RenamePayload = deserialize(&packet.data)?;
                 match storage_state_clone.handle_rename(rename_data).await {
@@ -530,6 +538,9 @@ impl PersistentStreamManager {
             }
         };
 
+        if op == AtlasOperation::PPeek {
+            return Ok(());
+        }
         // Create and send response packet
         let response_packet = match operation_result {
             Ok(success_msg) => {

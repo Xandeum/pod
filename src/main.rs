@@ -7,11 +7,12 @@ use pod::{
     keypair,
     logger::init_logger,
     server::start_server,
-    rpc::start_rpc_server,
+    rpc::{start_rpc_server, display_gossip_network},
     stats::Stats,
     storage::StorageState,
 };
 use quinn::Endpoint;
+use solana_sdk::signature::Signer;
 use std::{net::SocketAddr, str::FromStr, sync::Arc};
 use tokio::{
     signal,
@@ -21,7 +22,9 @@ use tokio::{
 // const ATLAS_IP: &str = "95.217.229.171:5000"; //Devnet
 const ATLAS_IP: &str = "65.108.233.175:5000"; // trynet
 // const ATLAS_IP: &str = "127.0.0.1:5000";
-const DEFAULT_BOOTSTRAP: &str = "173.212.207.32:9001"; // Default bootstrap node
+const DEFAULT_BOOTSTRAP: &str = "173.212.207.32:9001";
+const GOSSIP_IP: &str = "161.97.97.41"; // Default bootstrap node
+ // Default bootstrap node
 const QUIC_PORT: u16 = 5000;
 
 /// Xandeum Pod - High-performance blockchain node implementation
@@ -61,28 +64,42 @@ struct Args {
     #[arg(long, value_name = "IP:PORT")]
     atlas_ip: Option<String>,
 
-    #[arg(long, value_name = "PATH", required = true)]
-    keypair: String,
+    /// Path to keypair file (required unless using --gossip)
+    #[arg(long, value_name = "PATH", required_unless_present = "gossip")]
+    keypair: Option<String>,
+
+    /// Display network gossip peers from a running pod RPC endpoint and exit
+    /// Example: pod --gossip --rpc-ip 161.97.97.41
+    #[arg(long)]
+    gossip: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
 
+    // Handle --gossip flag early: query RPC and display network info
+    if args.gossip {
+        return display_gossip_network(GOSSIP_IP).await;
+    }
+
     let mut entrypoint = args.entrypoint;
     let no_entrypoint = args.no_entrypoint;
     let rpc_ip = args.rpc_ip;
     let atlas_ip = args.atlas_ip;
-    let keypair_path = args.keypair;
+    let keypair_path = args.keypair.expect("Keypair is required when not using --gossip");
 
     println!("Using keypair file: {}", keypair_path);
     
-    // Validate the keypair file before starting the application
-    match keypair::load_keypair_from_file(&keypair_path) {
+    // Load and validate the keypair file before starting the application
+    let pubkey = match keypair::load_keypair_from_file(&keypair_path) {
         Ok(keypair) => {
             match keypair::validate_keypair(&keypair) {
                 Ok(()) => {
+                    let pubkey_str = keypair.pubkey().to_string();
                     println!("✓ Keypair validation successful");
+                    println!("✓ Public key: {}", pubkey_str);
+                    Some(pubkey_str)
                 }
                 Err(e) => {
                     eprintln!("✗ Keypair validation failed: {}", e);
@@ -94,7 +111,7 @@ async fn main() -> Result<()> {
             eprintln!("✗ Failed to load keypair from {}: {}", keypair_path, e);
             std::process::exit(1);
         }
-    }
+    };
 
     if no_entrypoint {
         println!("Running without entrypoint.");
@@ -127,7 +144,7 @@ async fn main() -> Result<()> {
     endpoint.set_default_client_config(client_config);
     let addr = SocketAddr::from_str(&atlas_ip)?;
 
-    let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+    let (shutdown_tx, _shutdown_rx) = broadcast::channel(1);
 
     let mut client_shutdown_rx = shutdown_tx.subscribe();
 
@@ -158,7 +175,7 @@ async fn main() -> Result<()> {
     }
     
     // Start UDP gossip service
-    let _ = start_udp_gossip(peer_list.clone(), stats.clone()).await?;
+    let _ = start_udp_gossip(peer_list.clone(), stats.clone(), pubkey.clone()).await?;
 
     let stats_clone = stats.clone();
     let client_handle = tokio::spawn(async move {

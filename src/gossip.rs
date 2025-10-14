@@ -46,6 +46,7 @@ pub struct Peer {
     pub addr: SocketAddr,
     pub last_seen: u64,
     pub version: Option<String>,
+    pub pubkey: Option<String>,
 }
 
 impl Peer {
@@ -70,6 +71,7 @@ pub enum MessageType {
 pub struct GossipMessage {
     pub peer_list: PeerList,
     pub sender_version: String,
+    pub sender_pubkey: Option<String>,
     pub message_id: u64, // Add unique ID for deduplication
     pub timestamp: u64,  // Add timestamp for message ordering
     pub message_type: MessageType, // Distinguish between requests and responses
@@ -88,6 +90,12 @@ impl PeerList {
     /// Adds a peer to the list with version information.
     /// If a peer with the same IP already exists, it replaces the old one with the new port.
     pub fn add_with_version(&mut self, peer_addr: SocketAddr, update_last_seen: bool, version: Option<String>) {
+        self.add_with_version_and_pubkey(peer_addr, update_last_seen, version, None)
+    }
+
+    /// Adds a peer to the list with version and pubkey information.
+    /// If a peer with the same IP already exists, it replaces the old one with the new port.
+    pub fn add_with_version_and_pubkey(&mut self, peer_addr: SocketAddr, update_last_seen: bool, version: Option<String>, pubkey: Option<String>) {
         let now = Utc::now().timestamp() as u64;
         
         // First check for exact address match
@@ -97,6 +105,9 @@ impl PeerList {
             }
             if version.is_some() {
                 existing_peer.version = version;
+            }
+            if pubkey.is_some() {
+                existing_peer.pubkey = pubkey;
             }
             return;
         }
@@ -111,6 +122,7 @@ impl PeerList {
                 addr: peer_addr,
                 last_seen: now,
                 version: version.clone(),
+                pubkey: pubkey.clone(),
             };
         } else {
             // No existing peer with this IP, add new one
@@ -118,6 +130,7 @@ impl PeerList {
                 addr: peer_addr,
                 last_seen: now,
                 version: version.clone(),
+                pubkey: pubkey.clone(),
             });
         }
         
@@ -135,6 +148,7 @@ pub struct UdpGossipManager {
     local_port: u16,
     message_counter: AtomicU64,
     seen_messages: Arc<Mutex<HashMap<String, u64>>>, // "sender_addr:message_id" -> timestamp
+    pubkey: Option<String>,
 }
 
 impl UdpGossipManager {
@@ -142,12 +156,16 @@ impl UdpGossipManager {
         bind_addr: SocketAddr,
         peer_list: Arc<RwLock<PeerList>>,
         stats: Arc<Mutex<Stats>>,
+        pubkey: Option<String>,
     ) -> Result<Self> {
         let socket = TokioUdpSocket::bind(bind_addr).await?;
         let local_ip = get_local_ip()?;
         let local_port = bind_addr.port();
         
         info!("UDP Gossip bound to {} (local_ip: {}, port: {})", bind_addr, local_ip, local_port);
+        if let Some(ref pk) = pubkey {
+            info!("Gossip manager initialized with pubkey: {}", pk);
+        }
         
         Ok(Self {
             socket: Arc::new(socket),
@@ -157,6 +175,7 @@ impl UdpGossipManager {
             local_port,
             message_counter: AtomicU64::new(0),
             seen_messages: Arc::new(Mutex::new(HashMap::new())),
+            pubkey,
         })
     }
 
@@ -295,7 +314,7 @@ impl UdpGossipManager {
         // Add peers from the received list (excluding self)
         for peer in &gossip_msg.peer_list.list {
             if !self.is_self(peer.addr) {
-                local_list_guard.add_with_version(peer.addr, false, peer.version.clone());
+                local_list_guard.add_with_version_and_pubkey(peer.addr, false, peer.version.clone(), peer.pubkey.clone());
             } else {
                 info!("Ignoring self peer {} from gossip message", peer.addr);
             }
@@ -303,7 +322,7 @@ impl UdpGossipManager {
         
         // Add the sender (excluding self)
         if !self.is_self(sender_addr) {
-            local_list_guard.add_with_version(sender_addr, true, Some(gossip_msg.sender_version.clone()));
+            local_list_guard.add_with_version_and_pubkey(sender_addr, true, Some(gossip_msg.sender_version.clone()), gossip_msg.sender_pubkey.clone());
         } else {
             info!("Ignoring self sender {} from gossip message", sender_addr);
         }
@@ -341,6 +360,7 @@ impl UdpGossipManager {
                     list: non_self_peers,
                 },
                 sender_version: env!("CARGO_PKG_VERSION").to_string(),
+                sender_pubkey: self.pubkey.clone(),
                 message_id: self.next_message_id(),
                 timestamp: Utc::now().timestamp() as u64,
                 message_type: MessageType::Response,
@@ -423,6 +443,7 @@ impl UdpGossipManager {
                     list: non_self_peers,
                 },
                 sender_version: env!("CARGO_PKG_VERSION").to_string(),
+                sender_pubkey: self.pubkey.clone(),
                 message_id: self.next_message_id(),
                 timestamp: Utc::now().timestamp() as u64,
                 message_type: MessageType::Request,
@@ -456,9 +477,10 @@ impl UdpGossipManager {
 pub async fn start_udp_gossip(
     peer_list: Arc<RwLock<PeerList>>,
     stats: Arc<Mutex<Stats>>,
+    pubkey: Option<String>,
 ) -> Result<()> {
     let bind_addr = SocketAddr::from(([0, 0, 0, 0], GOSSIP_SERVER_PORT));
-    let gossip_manager = Arc::new(UdpGossipManager::new(bind_addr, peer_list.clone(), stats.clone()).await?);
+    let gossip_manager = Arc::new(UdpGossipManager::new(bind_addr, peer_list.clone(), stats.clone(), pubkey).await?);
 
     // Spawn background task for listening to incoming gossip
     let listener_manager = gossip_manager.clone();
@@ -521,6 +543,7 @@ pub async fn bootstrap_from_entrypoint_udp(
             let bootstrap_msg = GossipMessage {
                 peer_list: PeerList { list: Vec::new() },
                 sender_version: env!("CARGO_PKG_VERSION").to_string(),
+                sender_pubkey: None, // Bootstrap doesn't need pubkey initially
                 message_id: 99999978545,
                 timestamp: Utc::now().timestamp() as u64,
                 message_type: MessageType::Request,
@@ -555,7 +578,7 @@ pub async fn bootstrap_from_entrypoint_udp(
                                         // Add peers from response (only check IP, not port)
                                         for peer in response_msg.peer_list.list {
                                             if peer.addr.ip() != local_ip {
-                                                peer_list_guard.add_with_version(peer.addr, false, peer.version.clone());
+                                                peer_list_guard.add_with_version_and_pubkey(peer.addr, false, peer.version.clone(), peer.pubkey.clone());
                                             } else {
                                                 info!("Ignoring self peer from bootstrap: {}", peer.addr);
                                             }

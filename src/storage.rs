@@ -1003,18 +1003,20 @@ impl StorageState {
             self.clear_page(local_index).await?;
         }
 
-        let xent = self
-            .get_xentries_page(fs_record.clone().xentries_start_page)
-            .await?;
-        let map = self
-            .get_pod_mappings_page(fs_record.clone().pod_mappings_start_page)
-            .await?;
+        drop(global_index);
 
-        info!("xent : {:?}", xent);
-        info!("map : {:?}", map);
+        // let xent = self
+        //     .get_xentries_page(fs_record.clone().xentries_start_page)
+        //     .await?;
+        // let map = self
+        //     .get_pod_mappings_page(fs_record.clone().pod_mappings_start_page)
+        //     .await?;
 
-        // Log filesystem state after armageddon operation
-        let _ = self.log_filesystem_state("ARMAGEDDON").await;
+        // info!("xent : {:?}", xent);
+        // info!("map : {:?}", map);
+
+        // // Log filesystem state after armageddon operation
+        // let _ = self.log_filesystem_state("ARMAGEDDON").await;
 
         Ok(())
     }
@@ -1426,7 +1428,10 @@ impl StorageState {
         let mut global_meta = self.metadata.lock().await;
         let mut global_index = self.index.lock().await;
 
+        info!("pages : {:?}", pages);
+        info!("global_index : {:?}", global_index);
         for page in pages {
+
             let local_index = global_index
                 .index
                 .remove(&page)
@@ -1434,6 +1439,7 @@ impl StorageState {
 
             self.clear_page(local_index).await?;
         }
+        drop(global_index);
 
         info!("Cleared pages !");
 
@@ -1482,8 +1488,16 @@ impl StorageState {
                 let xentries_local_page = global_index
                     .index
                     .get(&inode1.pages[0])
-                    .ok_or_else(|| anyhow::anyhow!("Invalid page reference in xentires_inode"))?;
-                let mut dir_entry_page1 = self.get_xentries_page(*xentries_local_page).await?;
+                    .ok_or_else(|| anyhow::anyhow!("Invalid page reference in xentires_inode"))?
+                    .clone();
+                
+                let local_page2 = global_index
+                    .index
+                    .get(&inode2.pages[0])
+                    .ok_or_else(|| anyhow::anyhow!("Invalid page reference in pod_mapping_inode"))?
+                    .clone();
+                drop(global_index);
+                let mut dir_entry_page1 = self.get_xentries_page(inode1.pages[0]).await?;
 
                 for mapping in xentires {
                     dir_entry_page1
@@ -1491,14 +1505,12 @@ impl StorageState {
                         .retain(|entry| entry.inode_no != mapping.inode_no);
                 }
 
-                self.write_object(&inode1, &serialize(&dir_entry_page1)?, *xentries_local_page)
+                self.write_object(&inode1, &serialize(&dir_entry_page1)?, xentries_local_page)
                     .await?;
 
                 // Update second entry
-                let local_page2 = global_index.index.get(&inode2.pages[0]).ok_or_else(|| {
-                    anyhow::anyhow!("Invalid page reference in pod_mapping_inode")
-                })?;
-                let mut dir_entry_page2 = self.get_pod_mappings_page(*local_page2).await?;
+               
+                let mut dir_entry_page2 = self.get_pod_mappings_page(inode2.pages[0]).await?;
 
                 for mapping in mappings {
                     dir_entry_page2
@@ -1506,7 +1518,7 @@ impl StorageState {
                         .retain(|entry| entry.logical_page != mapping.logical_page);
                 }
 
-                self.write_object(&inode2, &serialize(&dir_entry_page2)?, *local_page2)
+                self.write_object(&inode2, &serialize(&dir_entry_page2)?, local_page2)
                     .await?;
             }
             (None, None) => {
@@ -1518,6 +1530,7 @@ impl StorageState {
                 ));
             }
         }
+        drop(global_meta);
 
         // Log filesystem state after delete_file operation
         let _ = self.log_filesystem_state("DELETE_FILE").await;
@@ -1815,10 +1828,12 @@ impl StorageState {
             .iter()
             .any(|fs| fs.fs_id == fs_record.fs_id)
         {
-            return Err(anyhow!(
-                "Filesystem with fs_id {} already exists in the catalog.",
-                fs_record.fs_id
-            ));
+            // return Err(anyhow!(
+            //     "Filesystem with fs_id {} already exists in the catalog.",
+            //     fs_record.fs_id
+            // ));
+            info!("Filesystem with fs_id {} already exists in the catalog.", fs_record.fs_id);
+            return Ok(());
         }
         catalog_page.filesystems.push(fs_record);
         self.write_catalog(catalog_page).await?;
