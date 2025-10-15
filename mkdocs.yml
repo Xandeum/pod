@@ -1,19 +1,22 @@
-site_name: Xandeum Pod Documentation
-site_description: Complete documentation for Xandeum Pod RPC API and CLI usage
+site_name: Xandeum Pod Documentation v0.4.2
+site_description: Complete documentation for Xandeum Pod pRPC API and CLI usage
 site_author: Xandeum Team
+site_url: https://xandeum.github.io/pod-docs/
 
 theme:
   name: material
   palette:
-    - scheme: default
-      primary: blue
-      accent: blue
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
-    - scheme: slate
-      primary: blue
-      accent: blue
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
@@ -22,27 +25,61 @@ theme:
     - navigation.sections
     - navigation.expand
     - navigation.top
+    - navigation.instant
+    - navigation.tracking
     - search.highlight
     - search.share
+    - search.suggest
     - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+  logo: assets/XandeumLogoStandard.png
+  favicon: assets/XandeumLogoStandard.png
+  font:
+    text: Inter
+    code: JetBrains Mono
+
+extra_css:
+  - assets/stylesheets/xandeum.css
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/xandeum
+    - icon: fontawesome/brands/twitter
+      link: https://twitter.com/xandeum
 
 nav:
   - Home: index.md
-  - RPC API: rpc-api.md
+  - pRPC API: rpc-api.md
   - CLI Usage: cli.md
 
 markdown_extensions:
   - pymdownx.highlight:
       anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
   - pymdownx.inlinehilite
   - pymdownx.snippets
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - admonition
   - pymdownx.details
   - pymdownx.tabbed:
       alternate_style: true
   - attr_list
   - md_in_html
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - def_list
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - tables
 
 plugins:
-  - search 
+  - search:
+      separator: '[\s\-,:!=\[\]()"`/]+|\.(?!\d)|&[lg]t;|(?!\b)(?=[A-Z][a-z])'
