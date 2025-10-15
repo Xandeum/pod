@@ -9,8 +9,8 @@ Complete reference for all command-line arguments and configuration options.
 pod
 ```
 
-Starts the pod with default configuration:
-- RPC server on `127.0.0.1:6000` (private)
+Starts the pnode with default configuration:
+- pRPC server on `127.0.0.1:6000` (private)
 - Stats server on `127.0.0.1:80` (private)
 - Uses default bootstrap node for peer discovery
 
@@ -28,11 +28,11 @@ pod --help
 
 **Output:**
 ```
-Xandeum Pod is a high-performance blockchain node that provides JSON-RPC API, 
+Xandeum pNode is a high-performance blockchain node that provides JSON-RPC API, 
 peer-to-peer communication via gossip protocol, and real-time statistics monitoring.
 
 PORTS:
-    6000    RPC API (configurable IP binding)
+    6000    pRPC API (configurable IP binding)
     80      Stats dashboard (localhost only)  
     9001    Gossip protocol (peer communication)
     5000    Atlas connection (outbound)
@@ -65,7 +65,7 @@ Options:
 ## Command-Line Arguments
 
 ### --rpc-ip `<IP_ADDRESS>`
-*Optional* - Specifies the IP address for the RPC server to bind to.
+*Optional* - Specifies the IP address for the pRPC server to bind to.
 
 **Default**: `127.0.0.1` (private, localhost only)
 
@@ -86,7 +86,7 @@ Options:
     ```
 
 !!! warning "Security Note"
-    Using `0.0.0.0` makes your RPC API accessible from any network interface. Only use this if you understand the security implications.
+    Using `0.0.0.0` makes your pRPC API accessible from any network interface. Only use this if you understand the security implications.
 
 ### --entrypoint `<IP:PORT>`
 *Optional* - Specifies a bootstrap node to connect to for initial peer discovery.
@@ -104,7 +104,7 @@ Options:
     ```
 
 ### --no-entrypoint
-*Optional* - Disables bootstrap peer discovery. The pod will start without attempting to connect to any initial peers.
+*Optional* - Disables bootstrap peer discovery. The pnode will start without attempting to connect to any initial peers.
 
 === "Example"
 
@@ -114,7 +114,7 @@ Options:
     ```
 
 !!! info "Isolated Mode"
-    When using `--no-entrypoint`, your pod will operate in isolation until other pods connect to it directly.
+    When using `--no-entrypoint`, your pnode will operate in isolation until other pnodes connect to it directly.
 
 ### --atlas-ip `<IP:PORT>`
 *Optional* - Specifies the Atlas server address for data streaming and synchronization.
@@ -132,7 +132,7 @@ Options:
     ```
 
 ### --version
-*Standalone* - Displays the pod software version and exits immediately.
+*Standalone* - Displays the pnode software version and exits immediately.
 
 ```bash
 pod --version
@@ -153,13 +153,13 @@ pod --help
 ```bash
 pod --no-entrypoint
 ```
-Perfect for local development and testing. No external connections, RPC only accessible locally.
+Perfect for local development and testing. No external connections, pRPC only accessible locally.
 
 ### 🌐 Public Node
 ```bash
 pod --rpc-ip 0.0.0.0
 ```
-Runs a public node with RPC API accessible from any network interface. Uses default bootstrap for peer discovery.
+Runs a public node with pRPC API accessible from any network interface. Uses default bootstrap for peer discovery.
 
 ### 🏢 Enterprise/Private Network
 ```bash
@@ -177,7 +177,7 @@ For testing with a local Atlas server without peer discovery.
 
 | Service | Default Port | Configurable | Description |
 |---------|-------------|-------------|-------------|
-| RPC API | 6000 | IP Only | JSON-RPC API endpoint |
+| pRPC API | 6000 | IP Only | JSON-RPC API endpoint |
 | Stats Dashboard | 80 | ❌ Fixed | Web-based statistics dashboard (localhost only) |
 | Gossip Protocol | 9001 | ❌ Fixed | Peer-to-peer communication and bootstrap discovery |
 | Atlas Connection | 5000 | ❌ Fixed | Connection to Atlas server for data streaming |
@@ -186,7 +186,7 @@ For testing with a local Atlas server without peer discovery.
 
 For public nodes, ensure these ports are accessible:
 
-- **Port 6000**: RPC API (if using `--rpc-ip 0.0.0.0`)
+- **Port 6000**: pRPC API (if using `--rpc-ip 0.0.0.0`)
 - **Port 9001**: Gossip protocol (always required for peer communication and discovery)
 - **Port 5000**: Atlas connection (outbound to Atlas server)
 
@@ -227,10 +227,10 @@ pod --invalid-option
 
 ### Development Environment
 ```bash
-# Start isolated pod for development
+# Start isolated pnode for development
 pod --no-entrypoint
 
-# Test RPC locally
+# Test pRPC locally
 curl -X POST http://127.0.0.1:6000/rpc \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"get-version","id":1}'
@@ -241,7 +241,7 @@ curl -X POST http://127.0.0.1:6000/rpc \
 # Start public node with proper logging
 RUST_LOG=info pod --rpc-ip 0.0.0.0
 
-# Verify RPC is accessible
+# Verify pRPC is accessible
 curl -X POST http://YOUR_PUBLIC_IP:6000/rpc \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"get-version","id":1}'
@@ -272,7 +272,7 @@ pod
 
 ## Systemd Service
 
-For production deployments, the pod can be managed as a systemd service. When installed via apt, the service file is automatically configured.
+For production deployments, the pnode can be managed as a systemd service. When installed via apt, the service file is automatically configured.
 
 ```ini
 [Unit]

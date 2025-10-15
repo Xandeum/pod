@@ -1,6 +1,6 @@
-# Xandeum Pod Documentation
+# ![Xandeum Logo](assets/images/XandeumLogoStandard.png){ width="150" } Xandeum pNode Documentation
 
-Welcome to the complete documentation for Xandeum Pod - a high-performance blockchain node implementation.
+Welcome to the complete documentation for Xandeum pNode - a high-performance blockchain node implementation.
 
 ## Quick Start
 
@@ -13,10 +13,10 @@ sudo apt install pod
 
 ### Basic Usage
 ```bash
-# Start with default settings (private RPC)
+# Start with default settings (private pRPC)
 pod
 
-# Start with public RPC access
+# Start with public pRPC access
 pod --rpc-ip 0.0.0.0
 
 # Check version
@@ -39,17 +39,17 @@ curl -X POST http://127.0.0.1:6000/rpc \
 
 ## What's Included
 
-### 🔌 RPC API
-Complete JSON-RPC 2.0 API for interacting with your pod:
-- **get-version**: Get pod software version
-- **get-stats**: Retrieve comprehensive pod statistics
-- **get-pods**: List known peer pods in the network
+### 🔌 pRPC API
+Complete JSON-RPC 2.0 API for interacting with your pnode:
+- **get-version**: Get pnode software version
+- **get-stats**: Retrieve comprehensive pnode statistics
+- **get-pods**: List known peer pnodes in the network
 
-[View RPC API Documentation](rpc-api.md){ .md-button .md-button--primary }
+[View pRPC API Documentation](rpc-api.md){ .md-button .md-button--primary }
 
 ### ⚙️ CLI Usage
 Comprehensive command-line reference:
-- **--rpc-ip**: Configure RPC server IP binding
+- **--rpc-ip**: Configure pRPC server IP binding
 - **--entrypoint**: Set bootstrap node for peer discovery
 - **--atlas-ip**: Configure Atlas server connection
 - And more...
@@ -58,9 +58,9 @@ Comprehensive command-line reference:
 
 ## Architecture Overview
 
-The Xandeum Pod consists of several key components:
+The Xandeum pNode consists of several key components:
 
-- **RPC Server**: JSON-RPC API on port 6000 (configurable IP)
+- **pRPC Server**: JSON-RPC API on port 6000 (configurable IP)
 - **Stats Dashboard**: Web interface on port 80 (localhost only)
 - **Gossip Protocol**: Peer-to-peer communication on port 9001
 - **Atlas Client**: Data streaming connection on port 5000
@@ -69,10 +69,10 @@ The Xandeum Pod consists of several key components:
 
 | Service | Port | Access | Configurable |
 |---------|------|--------|-------------|
-| RPC API | 6000 | Private (127.0.0.1) | IP only |
+| pRPC API | 6000 | Private (127.0.0.1) | IP only |
 | Stats Dashboard | 80 | Private (127.0.0.1) | No |
 | Gossip Protocol | 9001 | All interfaces | No |
 | Atlas Connection | 5000 | Fixed endpoint | No |
 
 !!! tip "Security by Default"
-    The pod is configured to be secure by default - RPC API is private unless explicitly configured otherwise.
+    The pnode is configured to be secure by default - pRPC API is private unless explicitly configured otherwise.

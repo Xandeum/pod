@@ -65,12 +65,12 @@ jobs:
     - name: Build documentation
       run: mkdocs build --verbose
     
-    - name: Checkout Test Documentation Repository
+    - name: Checkout Documentation Repository
       uses: actions/checkout@v4
       continue-on-error: true
       id: checkout
       with:
-        repository: Xandeum/test-doc
+        repository: Xandeum/pod-docs
         path: doc-repo
         token: ${{ secrets.PAT }}
         ref: master
@@ -80,7 +80,7 @@ jobs:
       run: |
         echo "Repository appears to be empty, initializing..."
         rm -rf doc-repo
-        git clone https://x-access-token:${{ secrets.PAT }}@github.com/Xandeum/test-doc.git doc-repo
+        git clone https://x-access-token:${{ secrets.PAT }}@github.com/Xandeum/pod-docs.git doc-repo
         cd doc-repo
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
@@ -90,7 +90,7 @@ jobs:
         git branch -M master
         git push origin master
     
-    - name: Deploy documentation to test-doc repository
+    - name: Deploy documentation to pod-docs repository
       run: |
         # Define paths
         REPO_DIR="${GITHUB_WORKSPACE}/doc-repo"

@@ -1,0 +1,53 @@
+/*
+ * Xandeum Pod Documentation - Custom Styling
+ */
+
+/* Custom color palette for Xandeum branding */
+:root {
+  --md-primary-fg-color: #1a1a2e;
+  --md-primary-fg-color--light: #16213e;
+  --md-primary-fg-color--dark: #0f0f1e;
+  --md-accent-fg-color: #e94560;
+  --md-accent-fg-color--transparent: rgba(233, 69, 96, 0.1);
+}
+
+/* Dark mode colors */
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #1a1a2e;
+  --md-primary-fg-color--light: #16213e;
+  --md-primary-fg-color--dark: #0f0f1e;
+  --md-accent-fg-color: #e94560;
+  --md-hue: 210;
+}
+
+/* Header logo styling */
+.md-header__button.md-logo img {
+  height: 2rem;
+  width: auto;
+}
+
+/* Improve code block styling */
+.highlight pre {
+  border-radius: 0.5rem;
+}
+
+/* Button styling */
+.md-button {
+  border-radius: 0.5rem;
+}
+
+.md-button--primary {
+  background-color: var(--md-accent-fg-color);
+  border-color: var(--md-accent-fg-color);
+}
+
+.md-button--primary:hover {
+  background-color: var(--md-primary-fg-color);
+  border-color: var(--md-primary-fg-color);
+}
+
+/* Admonition styling enhancements */
+.md-typeset .admonition {
+  border-radius: 0.5rem;
+}
+

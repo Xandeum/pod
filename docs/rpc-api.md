@@ -1,21 +1,21 @@
-# RPC API Reference
+# pRPC API Reference
 
-Complete reference for all JSON-RPC 2.0 methods available in Xandeum Pod.
+Complete reference for all JSON-RPC 2.0 methods available in Xandeum pNode.
 
 ## Overview
 
-The Xandeum Pod RPC API uses JSON-RPC 2.0 protocol over HTTP POST requests. All requests should be sent to the `/rpc` endpoint.
+The Xandeum pNode pRPC API uses JSON-RPC 2.0 protocol over HTTP POST requests. All requests should be sent to the `/prpc` endpoint.
 
 !!! info "Base URL"
-    `http://<pod-ip>:6000/rpc`
+    `http://<pnode-ip>:6000/rpc`
     
     **Default**: `http://127.0.0.1:6000/rpc` (private)
 
 ## Network Architecture
 
-The pod uses several network ports for different services:
+The pnode uses several network ports for different services:
 
-- **Port 6000**: RPC API server (configurable IP binding)
+- **Port 6000**: pRPC API server (configurable IP binding)
 - **Port 80**: Statistics dashboard (localhost only) 
 - **Port 9001**: Gossip protocol for peer discovery and communication
 - **Port 5000**: Atlas server connection for data streaming (fixed endpoint)
@@ -24,7 +24,7 @@ The pod uses several network ports for different services:
 
 === "get-version"
 
-    Returns the current version of the pod software.
+    Returns the current version of the pnode software.
 
     ### Request
     ```json
@@ -59,7 +59,7 @@ The pod uses several network ports for different services:
 
 === "get-stats"
 
-    Returns comprehensive statistics about the pod including system metrics, storage info, and network activity.
+    Returns comprehensive statistics about the pnode including system metrics, storage info, and network activity.
 
     ### Request
     ```json
@@ -113,7 +113,7 @@ The pod uses several network ports for different services:
 
 === "get-pods"
 
-    Returns a list of all known peer pods in the network with their status information.
+    Returns a list of all known peer pnodes in the network with their status information.
 
     ### Request
     ```json
@@ -153,11 +153,11 @@ The pod uses several network ports for different services:
 
     | Field | Type | Description |
     |-------|------|-------------|
-    | `address` | string | IP address and port of the peer pod |
-    | `version` | string | Software version of the peer pod |
+    | `address` | string | IP address and port of the peer pnode |
+    | `version` | string | Software version of the peer pnode |
     | `last_seen` | string | Human-readable timestamp of last contact |
     | `last_seen_timestamp` | number | Unix timestamp of last contact |
-    | `total_count` | number | Total number of known pods |
+    | `total_count` | number | Total number of known pnodes |
 
 ## Error Handling
 
@@ -201,7 +201,7 @@ All errors follow the JSON-RPC 2.0 specification and include standard error code
 import requests
 import json
 
-def call_rpc(method, params=None):
+def call_prpc(method, params=None):
     payload = {
         "jsonrpc": "2.0",
         "method": method,
@@ -218,11 +218,11 @@ def call_rpc(method, params=None):
     return response.json()
 
 # Get version
-version = call_rpc("get-version")
-print(f"Pod version: {version['result']['version']}")
+version = call_prpc("get-version")
+print(f"pNode version: {version['result']['version']}")
 
 # Get stats
-stats = call_rpc("get-stats")
+stats = call_prpc("get-stats")
 print(f"CPU usage: {stats['result']['stats']['cpu_percent']}%")
 ```
 
@@ -230,7 +230,7 @@ print(f"CPU usage: {stats['result']['stats']['cpu_percent']}%")
 ```javascript
 const fetch = require('node-fetch');
 
-async function callRPC(method, params = null) {
+async function callPRPC(method, params = null) {
   const payload = {
     jsonrpc: "2.0",
     method: method,
@@ -249,10 +249,10 @@ async function callRPC(method, params = null) {
 
 // Usage
 (async () => {
-  const version = await callRPC('get-version');
-  console.log(`Pod version: ${version.result.version}`);
+  const version = await callPRPC('get-version');
+  console.log(`pNode version: ${version.result.version}`);
   
-  const stats = await callRPC('get-stats');
+  const stats = await callPRPC('get-stats');
   console.log(`Uptime: ${stats.result.stats.uptime} seconds`);
 })();
 ```
@@ -261,30 +261,30 @@ async function callRPC(method, params = null) {
 ```bash
 #!/bin/bash
 
-RPC_URL="http://127.0.0.1:6000/rpc"
+PRPC_URL="http://127.0.0.1:6000/rpc"
 
-# Function to call RPC
-call_rpc() {
+# Function to call pRPC
+call_prpc() {
   local method=$1
-  curl -s -X POST "$RPC_URL" \
+  curl -s -X POST "$PRPC_URL" \
     -H "Content-Type: application/json" \
     -d "{\"jsonrpc\":\"2.0\",\"method\":\"$method\",\"id\":1}"
 }
 
 # Get version
 echo "Getting version..."
-call_rpc "get-version" | jq '.result.version'
+call_prpc "get-version" | jq '.result.version'
 
 # Get stats
 echo "Getting stats..."
-call_rpc "get-stats" | jq '.result.stats.cpu_percent'
+call_prpc "get-stats" | jq '.result.stats.cpu_percent'
 ```
 
 !!! tip "Installation"
     Install the pod via apt: `sudo apt install pod`
 
 !!! tip "Rate Limiting"
-    There are currently no rate limits on the RPC API, but be mindful of resource usage when making frequent requests.
+    There are currently no rate limits on the pRPC API, but be mindful of resource usage when making frequent requests.
 
 !!! warning "Security"
-    When using `--rpc-ip 0.0.0.0`, your RPC API will be accessible from any network interface. Ensure proper firewall rules are in place. 
+    When using `--rpc-ip 0.0.0.0`, your pRPC API will be accessible from any network interface. Ensure proper firewall rules are in place. 
