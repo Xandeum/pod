@@ -1,4 +1,4 @@
-name: Deploy Documentation
+name: Deploy Versioned Documentation
 
 on:
   push:
@@ -16,9 +16,8 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
-      repository-projects: write
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -30,100 +29,91 @@ jobs:
       with:
         python-version: '3.x'
     
+    - name: Cache Python dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
     - name: Install dependencies
       run: |
-        pip install mkdocs-material
+        pip install mkdocs-material mike
     
-    - name: Extract version from tag
+    - name: Extract version from Cargo.toml
       id: version
       run: |
-        if [[ $GITHUB_REF == refs/tags/v* ]]; then
-          VERSION=${GITHUB_REF#refs/tags/v}
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-          echo "IS_RELEASE=true" >> $GITHUB_OUTPUT
-        else
-          VERSION=$(grep '^version = ' Cargo.toml | cut -d'"' -f2)
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-          echo "IS_RELEASE=false" >> $GITHUB_OUTPUT
-        fi
+        VERSION=$(grep '^version = ' Cargo.toml | cut -d'"' -f2)
+        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
         echo "Detected version: $VERSION"
-    
-    - name: Update documentation with version
-      run: |
-        # Update version in mkdocs.yml
-        sed -i "s/site_name: Xandeum Pod Documentation/site_name: Xandeum Pod Documentation v${{ steps.version.outputs.VERSION }}/" mkdocs.yml
         
-        # Update version in docs
-        find docs/ -name "*.md" -exec sed -i "s/pod 1\.0\.0/pod ${{ steps.version.outputs.VERSION }}/g" {} \;
-        find docs/ -name "*.md" -exec sed -i "s/Pod v1\.0\.0/Pod v${{ steps.version.outputs.VERSION }}/g" {} \;
-        
-        # Add version info to homepage
-        if [[ "${{ steps.version.outputs.IS_RELEASE }}" == "true" ]]; then
-          sed -i '/^# Xandeum Pod Documentation/a\\n!!! info "Version"\n    This documentation is for **Xandeum Pod v${{ steps.version.outputs.VERSION }}**\n    Released: $(date +"%B %d, %Y")' docs/index.md
+        # Check if this is a tagged release
+        if [[ $GITHUB_REF == refs/tags/v* ]]; then
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          echo "TAG_VERSION=$TAG_VERSION" >> $GITHUB_OUTPUT
+          echo "IS_TAGGED_RELEASE=true" >> $GITHUB_OUTPUT
+          echo "This is a tagged release: $TAG_VERSION"
+        else
+          echo "IS_TAGGED_RELEASE=false" >> $GITHUB_OUTPUT
+          echo "This is a development push"
         fi
     
-    - name: Build documentation
-      run: mkdocs build --verbose
+    - name: Configure Git for deployment
+      run: |
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
     
     - name: Checkout Documentation Repository
       uses: actions/checkout@v4
-      continue-on-error: true
-      id: checkout
       with:
         repository: Xandeum/pod-docs
         path: doc-repo
         token: ${{ secrets.PAT }}
-        ref: master
+        fetch-depth: 0
     
-    - name: Initialize empty repository
-      if: steps.checkout.outcome == 'failure'
+    - name: Initialize gh-pages branch if needed
       run: |
-        echo "Repository appears to be empty, initializing..."
-        rm -rf doc-repo
-        git clone https://x-access-token:${{ secrets.PAT }}@github.com/Xandeum/pod-docs.git doc-repo
         cd doc-repo
-        git config user.name "GitHub Actions"
-        git config user.email "actions@github.com"
-        echo "# Xandeum Pod Documentation" > README.md
-        git add README.md
-        git commit -m "Initial commit - prepare for documentation deployment"
-        git branch -M master
-        git push origin master
-    
-    - name: Deploy documentation to pod-docs repository
-      run: |
-        # Define paths
-        REPO_DIR="${GITHUB_WORKSPACE}/doc-repo"
-        SITE_DIR="${GITHUB_WORKSPACE}/site"
         
-        # Copy the built documentation (replace all content)
-        rm -rf "${REPO_DIR}"/*
-        cp -r ${SITE_DIR}/* "${REPO_DIR}/"
-        
-        # Change into the repo directory
-        cd "${REPO_DIR}"
-        
-        # Configure git
-        git config user.name "GitHub Actions"
-        git config user.email "actions@github.com"
-        
-        # Ensure we're on the right branch
-        CURRENT_BRANCH=$(git branch --show-current)
-        if [ "$CURRENT_BRANCH" != "master" ]; then
-          echo "Current branch is $CURRENT_BRANCH, switching to master..."
-          git checkout -B master
+        # Check if gh-pages branch exists
+        if git ls-remote --heads origin gh-pages | grep gh-pages; then
+          echo "gh-pages branch exists, checking it out..."
+          git fetch origin gh-pages
+          git checkout gh-pages
+        else
+          echo "Creating new gh-pages branch..."
+          git checkout --orphan gh-pages
+          git rm -rf . 2>/dev/null || true
+          echo "# Xandeum Pod Documentation" > README.md
+          git add README.md
+          git commit -m "Initialize gh-pages branch for documentation"
+          git push origin gh-pages
         fi
+    
+    - name: Deploy documentation with mike
+      run: |
+        cd doc-repo
         
-        # Add all changes
-        git add -A .
+        # Copy source files to doc-repo
+        cp -r ${GITHUB_WORKSPACE}/docs .
+        cp ${GITHUB_WORKSPACE}/mkdocs.yml .
         
-        # Show status
-        echo "--- Git status before commit: ---"
-        git status
+        # Set version
+        VERSION="${{ steps.version.outputs.VERSION }}"
         
-        # Commit the changes
-        git commit --allow-empty -m "docs: Deploy Pod documentation v${{ steps.version.outputs.VERSION }}"
+        # Deploy this version
+        echo "Deploying documentation for version: $VERSION"
+        mike deploy --push --update-aliases $VERSION latest
         
-        # Push changes
-        echo "--- Pushing documentation changes to master branch ---"
-        git push origin master
+        # Set this version as the default
+        mike set-default --push latest
+        
+        echo "Documentation deployed successfully!"
+        echo "Version $VERSION is now available in the version selector"
+    
+    - name: Verify deployment
+      run: |
+        cd doc-repo
+        echo "Available versions:"
+        mike list

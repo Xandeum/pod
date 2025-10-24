@@ -1,4 +1,4 @@
-site_name: Xandeum Pod Documentation v0.4.2
+site_name: Xandeum Pod Documentation
 site_description: Complete documentation for Xandeum Pod pRPC API and CLI usage
 site_author: Xandeum Team
 site_url: https://xandeum.github.io/pod-docs/
@@ -43,6 +43,9 @@ extra_css:
   - assets/stylesheets/xandeum.css
 
 extra:
+  version:
+    provider: mike
+    default: latest
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/xandeum
