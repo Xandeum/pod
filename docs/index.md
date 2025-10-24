@@ -1,15 +1,50 @@
-# ![Xandeum Logo](assets/images/XandeumLogoStandard.png){ width="150" } Xandeum pNode Documentation
+# ![Xandeum Logo](assets/images/XandeumLogoStandard.png "Xandeum Logo"){ width="150" } Xandeum pNode Documentation
 
-Welcome to the complete documentation for Xandeum pNode - a high-performance blockchain node implementation.
+Welcome to the documentation for Xandeum pNode - a high-performance blockchain node implementation.
 
 ## Quick Start
 
 ### Installation
+
+!!! info "Prerequisites"
+    - A Linux server or VPS running Ubuntu/Debian
+    - SSH access to your server
+    - Basic command line knowledge
+
+**Step 1: Access Your Server**
+
+If you're using a VPS (Virtual Private Server), connect via SSH:
 ```bash
-# Install via apt package manager
-sudo apt update
-sudo apt install pod
+ssh username@your-server-ip
 ```
+
+Once connected to your server, open a terminal window.
+
+**Step 2: Add the Xandeum Repository**
+
+First, install the required packages and add the Xandeum repository:
+```bash
+# Install repository prerequisites
+sudo apt-get install -y apt-transport-https ca-certificates
+
+# Add the Xandeum repository
+echo "deb [trusted=yes] https://xandeum.github.io/pod-apt-package/ stable main" | sudo tee /etc/apt/sources.list.d/xandeum-pod.list
+
+# Update package list
+sudo apt-get update
+```
+
+**Step 3: Install the pNode**
+```bash
+# Install the pod package
+sudo apt-get install pod
+```
+
+!!! tip "Verify Installation"
+    After installation completes, you can verify it was successful by checking the version:
+    ```bash
+    pod --version
+    ```
 
 ### Basic Usage
 ```bash
@@ -27,6 +62,9 @@ pod --help
 ```
 
 ### Test Your Setup
+
+Verify your pNode is running correctly:
+
 ```bash
 curl -X POST http://127.0.0.1:6000/rpc \
   -H "Content-Type: application/json" \
@@ -36,6 +74,18 @@ curl -X POST http://127.0.0.1:6000/rpc \
     "id": 1
   }'
 ```
+
+!!! success "Expected Response"
+    If everything is working, you should see a JSON response with the version number:
+    ```json
+    {
+      "jsonrpc": "2.0",
+      "result": {
+        "version": "0.4.2"
+      },
+      "id": 1
+    }
+    ```
 
 ## What's Included
 
