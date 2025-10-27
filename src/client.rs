@@ -174,7 +174,7 @@ impl PersistentStreamManager {
                         info!("📖 RECEIVED CATALOG from Atlas: {} filesystems", received_catalog.filesystems.len());
                         
                         for fs in &received_catalog.filesystems {
-                            info!("  📁 Atlas FS ID: {} (Pod: {})", fs.fs_id, fs.home_pod_id);
+                            info!("  📁 Atlas FS ID: {} (Pod: {})", fs.fs_id, fs.home_pod_id[0]);
                         }
 
                         // 📝 WRITE CATALOG: Write the received catalog to pod's storage

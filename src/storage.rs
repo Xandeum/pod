@@ -1885,7 +1885,7 @@ impl StorageState {
                 info!("  Total filesystems: {}", catalog.filesystems.len());
                 for fs in &catalog.filesystems {
                     info!("  🗂️  Filesystem ID: {}", fs.fs_id);
-                    info!("      Home Pod: {}", fs.home_pod_id);
+                    info!("      Home Pod: {}", fs.home_pod_id[0]);
                     info!("      Root Inode: {}", fs.root_inode_id);
                     info!("      Xentries Page: {}", fs.xentries_start_page);
                     info!("      Pod Mappings Page: {}", fs.pod_mappings_start_page);
@@ -1915,7 +1915,7 @@ impl StorageState {
                             for mapping in &pod_mappings.mappings {
                                 info!(
                                     "        Page {} -> Pod {}",
-                                    mapping.logical_page, mapping.pod_id
+                                    mapping.logical_page, mapping.pod_id[0]
                                 );
                             }
                         }
