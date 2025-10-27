@@ -659,7 +659,7 @@ pub async fn start_persistent_stream_loop(
                             stats_guard.active_streams = 0;
                         }
                         
-                        stream_manager = PersistentStreamManager::new(stream_manager.endpoint.clone(), stream_manager.addr, stream_manager.stats.clone());
+                        stream_manager = PersistentStreamManager::new_with_keypair(stream_manager.endpoint.clone(), stream_manager.addr, stream_manager.stats.clone(), stream_manager.keypair);
                         continue;
                     }
                 }
@@ -690,7 +690,7 @@ pub async fn start_persistent_stream_loop(
                             stats_guard.active_streams = 0;
                         }
                         
-                        stream_manager = PersistentStreamManager::new(stream_manager.endpoint.clone(), stream_manager.addr, stream_manager.stats.clone());
+                        stream_manager = PersistentStreamManager::new_with_keypair(stream_manager.endpoint.clone(), stream_manager.addr, stream_manager.stats.clone(), stream_manager.keypair);
                         continue;
                     }
                 }
